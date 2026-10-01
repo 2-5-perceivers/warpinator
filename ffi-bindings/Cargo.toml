@@ -26,7 +26,7 @@ strip = true
 [dependencies]
 uniffi = { version = "0.32.0", features = ["cli", "tokio"] }
 warpinator-lib = {path = "../core", default-features = false}
-tokio = "1.51.1"
+tokio = "1.53.1"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-android = { version = "0.2.0", optional = true }

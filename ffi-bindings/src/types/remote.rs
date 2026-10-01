@@ -1,4 +1,6 @@
-#[derive(uniffi::Enum)]
+use warpinator_lib::types::remote::{RemoteConnectionError, RemoteState};
+
+#[uniffi::remote(Enum)]
 pub enum RemoteConnectionError {
     SslError,
     GroupCodeMismatch,
@@ -6,38 +8,13 @@ pub enum RemoteConnectionError {
     DuplexError,
 }
 
-#[derive(uniffi::Enum)]
+#[uniffi::remote(Enum)]
 pub enum RemoteState {
     Error(RemoteConnectionError),
     Disconnected,
     Connecting,
     AwaitingDuplex,
     Connected,
-}
-
-impl From<warpinator_lib::types::remote::RemoteState> for RemoteState {
-    fn from(value: warpinator_lib::types::remote::RemoteState) -> Self {
-        match value {
-            warpinator_lib::types::remote::RemoteState::Error(e) => Self::Error(match e {
-                warpinator_lib::types::remote::RemoteConnectionError::SslError => {
-                    RemoteConnectionError::SslError
-                }
-                warpinator_lib::types::remote::RemoteConnectionError::GroupCodeMismatch => {
-                    RemoteConnectionError::GroupCodeMismatch
-                }
-                warpinator_lib::types::remote::RemoteConnectionError::NoCertificate => {
-                    RemoteConnectionError::NoCertificate
-                }
-                warpinator_lib::types::remote::RemoteConnectionError::DuplexError => {
-                    RemoteConnectionError::DuplexError
-                }
-            }),
-            warpinator_lib::types::remote::RemoteState::Disconnected => Self::Disconnected,
-            warpinator_lib::types::remote::RemoteState::Connecting => Self::Connecting,
-            warpinator_lib::types::remote::RemoteState::AwaitingDuplex => Self::AwaitingDuplex,
-            warpinator_lib::types::remote::RemoteState::Connected => Self::Connected,
-        }
-    }
 }
 
 #[derive(uniffi::Record)]
@@ -76,7 +53,7 @@ impl From<&warpinator_lib::types::remote::Remote> for Remote {
             hostname: value.hostname.clone(),
             picture: value.picture.is_some(),
             picture_version: value.picture_version,
-            state: value.state.clone().into(),
+            state: value.state.clone(),
             service_static: value.service_static,
             service_available: value.service_available,
             #[cfg(feature = "messaging")]

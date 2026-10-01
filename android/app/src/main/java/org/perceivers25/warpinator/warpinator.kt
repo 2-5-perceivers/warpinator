@@ -17,26 +17,29 @@ package org.perceivers25.warpinator
 // compile the Rust component. The easiest way to ensure this is to bundle the Kotlin
 // helpers directly inline like we're doing here.
 
-import android.os.Build
-import androidx.annotation.RequiresApi
-import com.sun.jna.Callback
+import com.sun.jna.Library
+import com.sun.jna.IntegerType
 import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
+import com.sun.jna.Callback
+import com.sun.jna.ptr.*
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
+import android.os.Build
+import androidx.annotation.RequiresApi
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.CharBuffer
-import java.nio.charset.CodingErrorAction
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
-import kotlin.coroutines.resume
 
 // This is a helper for safely working with byte buffers returned from the Rust code.
 // A rust-owned buffer is represented by its capacity, its current length, and a
@@ -49,51 +52,47 @@ import kotlin.coroutines.resume
 open class RustBuffer : Structure() {
     // Note: `capacity` and `len` are actually `ULong` values, but JVM only supports signed values.
     // When dealing with these fields, make sure to call `toULong()`.
-    @JvmField
-    var capacity: Long = 0
+    @JvmField var capacity: Long = 0
+    @JvmField var len: Long = 0
+    @JvmField var data: Pointer? = null
 
-    @JvmField
-    var len: Long = 0
+    class ByValue: RustBuffer(), Structure.ByValue
+    class ByReference: RustBuffer(), Structure.ByReference
 
-    @JvmField
-    var data: Pointer? = null
-
-    class ByValue : RustBuffer(), Structure.ByValue
-    class ByReference : RustBuffer(), Structure.ByReference
-
-    internal fun setValue(other: RustBuffer) {
+   internal fun setValue(other: RustBuffer) {
         capacity = other.capacity
         len = other.len
         data = other.data
     }
 
     companion object {
-        internal fun alloc(size: ULong = 0UL) = uniffiRustCall { status ->
+        internal fun alloc(size: ULong = 0UL) = uniffiRustCall() { status ->
             // Note: need to convert the size to a `Long` value to make this work with JVM.
             UniffiLib.ffi_warpinator_rustbuffer_alloc(size.toLong(), status)
         }.also {
-            if (it.data == null) {
-                throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=${size})")
-            }
+            if(it.data == null) {
+               throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=${size})")
+           }
         }
 
-        internal fun create(capacity: ULong, len: ULong, data: Pointer?): ByValue {
-            var buf = ByValue()
+        internal fun create(capacity: ULong, len: ULong, data: Pointer?): RustBuffer.ByValue {
+            var buf = RustBuffer.ByValue()
             buf.capacity = capacity.toLong()
             buf.len = len.toLong()
             buf.data = data
             return buf
         }
 
-        internal fun free(buf: ByValue) = uniffiRustCall { status ->
+        internal fun free(buf: RustBuffer.ByValue) = uniffiRustCall() { status ->
             UniffiLib.ffi_warpinator_rustbuffer_free(buf, status)
         }
     }
 
     @Suppress("TooGenericExceptionThrown")
-    fun asByteBuffer() = this.data?.getByteBuffer(0, this.len)?.also {
-        it.order(ByteOrder.BIG_ENDIAN)
-    }
+    fun asByteBuffer() =
+        this.data?.getByteBuffer(0, this.len)?.also {
+            it.order(ByteOrder.BIG_ENDIAN)
+        }
 }
 
 // This is a helper for safely passing byte references into the rust code.
@@ -104,15 +103,48 @@ open class RustBuffer : Structure() {
 
 @Structure.FieldOrder("len", "data")
 internal open class ForeignBytes : Structure() {
-    @JvmField
-    var len: Int = 0
-
-    @JvmField
-    var data: Pointer? = null
+    @JvmField var len: Int = 0
+    @JvmField var data: Pointer? = null
 
     class ByValue : ForeignBytes(), Structure.ByValue
 }
 
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Only `lower` is valid — zero-copy byte buffers only flow foreign -> Rust,
+// and only in argument position. `lift`, `read`, `write`, and
+// `allocationSize` have no sound implementation here and all panic at
+// runtime. The `FfiConverter` interface is implemented so that the
+// compiler enforces the full method set (rather than relying on eyeball).
+//
+// The provided `ByteBuffer` MUST be direct — only direct buffers have a
+// stable native address that JNA can expose via `getDirectBufferPointer`.
+// The returned `ForeignBytes.ByValue` is only valid for the duration of
+// the FFI call; the Rust side treats it as a borrow.
+internal object FfiConverterByRefBytes : FfiConverter<java.nio.ByteBuffer, ForeignBytes.ByValue> {
+    override fun lower(value: java.nio.ByteBuffer): ForeignBytes.ByValue {
+        require(value.isDirect) { "UniFFI zero-copy &[u8] requires a direct ByteBuffer. Use ByteBuffer.allocateDirect()." }
+        val remaining = value.remaining()
+        val fb = ForeignBytes.ByValue()
+        fb.len = remaining
+        // Zero-length direct buffers: skip getDirectBufferPointer (platform-variable behavior)
+        // and pass null. The Rust side treats (null, 0) as &[].
+        fb.data = if (remaining == 0) null else com.sun.jna.Native.getDirectBufferPointer(value)
+        return fb
+    }
+
+    override fun lift(value: ForeignBytes.ByValue): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+
+    override fun read(buf: java.nio.ByteBuffer): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun write(value: java.nio.ByteBuffer, buf: java.nio.ByteBuffer): Unit =
+        error("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun allocationSize(value: java.nio.ByteBuffer): ULong =
+        error("ByRef bytes have no RustBuffer allocation size: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+}
 /**
  * The FfiConverter interface handles converter types to and from the FFI
  *
@@ -121,7 +153,7 @@ internal open class ForeignBytes : Structure() {
  *
  * @suppress
  */
-interface FfiConverter<KotlinType, FfiType> {
+public interface FfiConverter<KotlinType, FfiType> {
     // Convert an FFI type to a Kotlin type
     fun lift(value: FfiType): KotlinType
 
@@ -172,11 +204,11 @@ interface FfiConverter<KotlinType, FfiType> {
     fun liftFromRustBuffer(rbuf: RustBuffer.ByValue): KotlinType {
         val byteBuf = rbuf.asByteBuffer()!!
         try {
-            val item = read(byteBuf)
-            if (byteBuf.hasRemaining()) {
-                throw RuntimeException("junk remaining in buffer after lifting, something is very wrong!!")
-            }
-            return item
+           val item = read(byteBuf)
+           if (byteBuf.hasRemaining()) {
+               throw RuntimeException("junk remaining in buffer after lifting, something is very wrong!!")
+           }
+           return item
         } finally {
             RustBuffer.free(rbuf)
         }
@@ -188,7 +220,7 @@ interface FfiConverter<KotlinType, FfiType> {
  *
  * @suppress
  */
-interface FfiConverterRustBuffer<KotlinType> : FfiConverter<KotlinType, RustBuffer.ByValue> {
+public interface FfiConverterRustBuffer<KotlinType>: FfiConverter<KotlinType, RustBuffer.ByValue> {
     override fun lift(value: RustBuffer.ByValue) = liftFromRustBuffer(value)
     override fun lower(value: KotlinType) = lowerIntoRustBuffer(value)
 }
@@ -201,13 +233,10 @@ internal const val UNIFFI_CALL_UNEXPECTED_ERROR = 2.toByte()
 
 @Structure.FieldOrder("code", "error_buf")
 internal open class UniffiRustCallStatus : Structure() {
-    @JvmField
-    var code: Byte = 0
+    @JvmField var code: Byte = 0
+    @JvmField var error_buf: RustBuffer.ByValue = RustBuffer.ByValue()
 
-    @JvmField
-    var error_buf: RustBuffer.ByValue = RustBuffer.ByValue()
-
-    class ByValue : UniffiRustCallStatus(), Structure.ByValue
+    class ByValue: UniffiRustCallStatus(), Structure.ByValue
 
     fun isSuccess(): Boolean {
         return code == UNIFFI_CALL_SUCCESS
@@ -222,8 +251,8 @@ internal open class UniffiRustCallStatus : Structure() {
     }
 
     companion object {
-        fun create(code: Byte, errorBuf: RustBuffer.ByValue): ByValue {
-            val callStatus = ByValue()
+        fun create(code: Byte, errorBuf: RustBuffer.ByValue): UniffiRustCallStatus.ByValue {
+            val callStatus = UniffiRustCallStatus.ByValue()
             callStatus.code = code
             callStatus.error_buf = errorBuf
             return callStatus
@@ -231,7 +260,7 @@ internal open class UniffiRustCallStatus : Structure() {
     }
 }
 
-class InternalException(message: String) : Exception(message)
+class InternalException(message: String) : kotlin.Exception(message)
 
 /**
  * Each top-level error class has a companion object that can lift the error from the call status's rust buffer
@@ -239,7 +268,7 @@ class InternalException(message: String) : Exception(message)
  * @suppress
  */
 interface UniffiRustCallStatusErrorHandler<E> {
-    fun lift(error_buf: RustBuffer.ByValue): E
+    fun lift(error_buf: RustBuffer.ByValue): E;
 }
 
 // Helpers for calling Rust
@@ -247,10 +276,7 @@ interface UniffiRustCallStatusErrorHandler<E> {
 // synchronize itself
 
 // Call a rust function that returns a Result<>.  Pass in the Error class companion that corresponds to the Err
-private inline fun <U, E : Exception> uniffiRustCallWithError(
-    errorHandler: UniffiRustCallStatusErrorHandler<E>,
-    callback: (UniffiRustCallStatus) -> U,
-): U {
+private inline fun <U, E: kotlin.Exception> uniffiRustCallWithError(errorHandler: UniffiRustCallStatusErrorHandler<E>, callback: (UniffiRustCallStatus) -> U): U {
     var status = UniffiRustCallStatus()
     val return_value = callback(status)
     uniffiCheckCallStatus(errorHandler, status)
@@ -258,10 +284,7 @@ private inline fun <U, E : Exception> uniffiRustCallWithError(
 }
 
 // Check UniffiRustCallStatus and throw an error if the call wasn't successful
-private fun <E : Exception> uniffiCheckCallStatus(
-    errorHandler: UniffiRustCallStatusErrorHandler<E>,
-    status: UniffiRustCallStatus,
-) {
+private fun<E: kotlin.Exception> uniffiCheckCallStatus(errorHandler: UniffiRustCallStatusErrorHandler<E>, status: UniffiRustCallStatus) {
     if (status.isSuccess()) {
         return
     } else if (status.isError()) {
@@ -285,7 +308,7 @@ private fun <E : Exception> uniffiCheckCallStatus(
  *
  * @suppress
  */
-object UniffiNullRustCallStatusErrorHandler : UniffiRustCallStatusErrorHandler<InternalException> {
+object UniffiNullRustCallStatusErrorHandler: UniffiRustCallStatusErrorHandler<InternalException> {
     override fun lift(error_buf: RustBuffer.ByValue): InternalException {
         RustBuffer.free(error_buf)
         return InternalException("Unexpected CALL_ERROR")
@@ -297,49 +320,40 @@ private inline fun <U> uniffiRustCall(callback: (UniffiRustCallStatus) -> U): U 
     return uniffiRustCallWithError(UniffiNullRustCallStatusErrorHandler, callback)
 }
 
-internal inline fun <T> uniffiTraitInterfaceCall(
+internal inline fun<T> uniffiTraitInterfaceCall(
     callStatus: UniffiRustCallStatus,
     makeCall: () -> T,
     writeReturn: (T) -> Unit,
 ) {
     try {
         writeReturn(makeCall())
-    } catch (e: Exception) {
-        val err = try {
-            e.stackTraceToString()
-        } catch (_: Throwable) {
-            ""
-        }
+    } catch(e: kotlin.Exception) {
+        val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
         callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
         callStatus.error_buf = FfiConverterString.lower(err)
     }
 }
 
-internal inline fun <T, reified E : Throwable> uniffiTraitInterfaceCallWithError(
+internal inline fun<T, reified E: Throwable> uniffiTraitInterfaceCallWithError(
     callStatus: UniffiRustCallStatus,
     makeCall: () -> T,
     writeReturn: (T) -> Unit,
-    lowerError: (E) -> RustBuffer.ByValue,
+    lowerError: (E) -> RustBuffer.ByValue
 ) {
     try {
         writeReturn(makeCall())
-    } catch (e: Exception) {
+    } catch(e: kotlin.Exception) {
         if (e is E) {
             callStatus.code = UNIFFI_CALL_ERROR
             callStatus.error_buf = lowerError(e)
         } else {
-            val err = try {
-                e.stackTraceToString()
-            } catch (_: Throwable) {
-                ""
-            }
+            val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
             callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
             callStatus.error_buf = FfiConverterString.lower(err)
         }
     }
 }
-
-// Initial value and increment amount for handles.
+// Initial value and increment amount for handles. 
 // These ensure that Kotlin-generated handles always have the lowest bit set
 private const val UNIFFI_HANDLEMAP_INITIAL = 1.toLong()
 private const val UNIFFI_HANDLEMAP_DELTA = 2.toLong()
@@ -347,11 +361,10 @@ private const val UNIFFI_HANDLEMAP_DELTA = 2.toLong()
 // Map handles to objects
 //
 // This is used pass an opaque 64-bit handle representing a foreign object to the Rust code.
-internal class UniffiHandleMap<T : Any> {
+internal class UniffiHandleMap<T: Any> {
     private val map = ConcurrentHashMap<Long, T>()
-
-    // Start
-    private val counter = AtomicLong(UNIFFI_HANDLEMAP_INITIAL)
+    // Start 
+    private val counter = java.util.concurrent.atomic.AtomicLong(UNIFFI_HANDLEMAP_INITIAL)
 
     val size: Int
         get() = map.size
@@ -365,8 +378,7 @@ internal class UniffiHandleMap<T : Any> {
 
     // Clone a handle, creating a new one
     fun clone(handle: Long): Long {
-        val obj =
-            map.get(handle) ?: throw InternalException("UniffiHandleMap.clone: Invalid handle")
+        val obj = map.get(handle) ?: throw InternalException("UniffiHandleMap.clone: Invalid handle")
         return insert(obj)
     }
 
@@ -393,568 +405,395 @@ private fun findLibraryName(componentName: String): String {
 }
 
 // Define FFI callback types
-internal interface UniffiRustFutureContinuationCallback : Callback {
-    fun callback(`data`: Long, pollResult: Byte)
+internal interface UniffiRustFutureContinuationCallback : com.sun.jna.Callback {
+    fun callback(`data`: Long,`pollResult`: Byte,)
 }
-
-internal interface UniffiForeignFutureDroppedCallback : Callback {
-    fun callback(handle: Long)
+internal interface UniffiForeignFutureDroppedCallback : com.sun.jna.Callback {
+    fun callback(`handle`: Long,)
 }
-
-internal interface UniffiCallbackInterfaceFree : Callback {
-    fun callback(handle: Long)
+internal interface UniffiCallbackInterfaceFree : com.sun.jna.Callback {
+    fun callback(`handle`: Long,)
 }
-
-internal interface UniffiCallbackInterfaceClone : Callback {
-    fun callback(handle: Long): Long
+internal interface UniffiCallbackInterfaceClone : com.sun.jna.Callback {
+    fun callback(`handle`: Long,)
+    : Long
 }
-
 @Structure.FieldOrder("handle", "free")
 internal open class UniffiForeignFutureDroppedCallbackStruct(
-    @JvmField internal var handle: Long = 0.toLong(),
-    @JvmField internal var free: UniffiForeignFutureDroppedCallback? = null,
+    @JvmField internal var `handle`: Long = 0.toLong(),
+    @JvmField internal var `free`: UniffiForeignFutureDroppedCallback? = null,
 ) : Structure() {
     class UniffiByValue(
-        handle: Long = 0.toLong(),
-        free: UniffiForeignFutureDroppedCallback? = null,
-    ) : UniffiForeignFutureDroppedCallbackStruct(handle, free), ByValue
+        `handle`: Long = 0.toLong(),
+        `free`: UniffiForeignFutureDroppedCallback? = null,
+    ): UniffiForeignFutureDroppedCallbackStruct(`handle`,`free`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureDroppedCallbackStruct) {
-        handle = other.handle
-        free = other.free
+   internal fun uniffiSetValue(other: UniffiForeignFutureDroppedCallbackStruct) {
+        `handle` = other.`handle`
+        `free` = other.`free`
     }
 
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultU8(
-    @JvmField internal var returnValue: Byte = 0.toByte(),
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Byte = 0.toByte(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Byte = 0.toByte(),
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultU8(returnValue, callStatus), ByValue
+        `returnValue`: Byte = 0.toByte(),
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultU8(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultU8) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU8) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteU8 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultU8.UniffiByValue)
+internal interface UniffiForeignFutureCompleteU8 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU8.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultI8(
-    @JvmField internal var returnValue: Byte = 0.toByte(),
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Byte = 0.toByte(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Byte = 0.toByte(),
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultI8(returnValue, callStatus), ByValue
+        `returnValue`: Byte = 0.toByte(),
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultI8(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultI8) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI8) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteI8 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultI8.UniffiByValue)
+internal interface UniffiForeignFutureCompleteI8 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI8.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultU16(
-    @JvmField internal var returnValue: Short = 0.toShort(),
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Short = 0.toShort(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Short = 0.toShort(),
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultU16(returnValue, callStatus), ByValue
+        `returnValue`: Short = 0.toShort(),
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultU16(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultU16) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU16) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteU16 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultU16.UniffiByValue)
+internal interface UniffiForeignFutureCompleteU16 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU16.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultI16(
-    @JvmField internal var returnValue: Short = 0.toShort(),
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Short = 0.toShort(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Short = 0.toShort(),
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultI16(returnValue, callStatus), ByValue
+        `returnValue`: Short = 0.toShort(),
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultI16(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultI16) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI16) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteI16 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultI16.UniffiByValue)
+internal interface UniffiForeignFutureCompleteI16 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI16.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultU32(
-    @JvmField internal var returnValue: Int = 0,
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Int = 0,
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Int = 0,
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultU32(returnValue, callStatus), ByValue
+        `returnValue`: Int = 0,
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultU32(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultU32) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU32) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteU32 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultU32.UniffiByValue)
+internal interface UniffiForeignFutureCompleteU32 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU32.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultI32(
-    @JvmField internal var returnValue: Int = 0,
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Int = 0,
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Int = 0,
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultI32(returnValue, callStatus), ByValue
+        `returnValue`: Int = 0,
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultI32(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultI32) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI32) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteI32 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultI32.UniffiByValue)
+internal interface UniffiForeignFutureCompleteI32 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI32.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultU64(
-    @JvmField internal var returnValue: Long = 0.toLong(),
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Long = 0.toLong(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Long = 0.toLong(),
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultU64(returnValue, callStatus), ByValue
+        `returnValue`: Long = 0.toLong(),
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultU64(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultU64) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultU64) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteU64 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultU64.UniffiByValue)
+internal interface UniffiForeignFutureCompleteU64 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultU64.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultI64(
-    @JvmField internal var returnValue: Long = 0.toLong(),
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Long = 0.toLong(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Long = 0.toLong(),
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultI64(returnValue, callStatus), ByValue
+        `returnValue`: Long = 0.toLong(),
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultI64(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultI64) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultI64) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteI64 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultI64.UniffiByValue)
+internal interface UniffiForeignFutureCompleteI64 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultI64.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultF32(
-    @JvmField internal var returnValue: Float = 0.0f,
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Float = 0.0f,
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Float = 0.0f,
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultF32(returnValue, callStatus), ByValue
+        `returnValue`: Float = 0.0f,
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultF32(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultF32) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultF32) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteF32 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultF32.UniffiByValue)
+internal interface UniffiForeignFutureCompleteF32 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultF32.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultF64(
-    @JvmField internal var returnValue: Double = 0.0,
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: Double = 0.0,
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: Double = 0.0,
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultF64(returnValue, callStatus), ByValue
+        `returnValue`: Double = 0.0,
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultF64(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultF64) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultF64) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteF64 : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultF64.UniffiByValue)
+internal interface UniffiForeignFutureCompleteF64 : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultF64.UniffiByValue,)
 }
-
 @Structure.FieldOrder("returnValue", "callStatus")
 internal open class UniffiForeignFutureResultRustBuffer(
-    @JvmField internal var returnValue: RustBuffer.ByValue = RustBuffer.ByValue(),
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `returnValue`: RustBuffer.ByValue = RustBuffer.ByValue(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        returnValue: RustBuffer.ByValue = RustBuffer.ByValue(),
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultRustBuffer(returnValue, callStatus), ByValue
+        `returnValue`: RustBuffer.ByValue = RustBuffer.ByValue(),
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultRustBuffer(`returnValue`,`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultRustBuffer) {
-        returnValue = other.returnValue
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultRustBuffer) {
+        `returnValue` = other.`returnValue`
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteRustBuffer : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultRustBuffer.UniffiByValue)
+internal interface UniffiForeignFutureCompleteRustBuffer : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultRustBuffer.UniffiByValue,)
 }
-
 @Structure.FieldOrder("callStatus")
 internal open class UniffiForeignFutureResultVoid(
-    @JvmField internal var callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    @JvmField internal var `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
 ) : Structure() {
     class UniffiByValue(
-        callStatus: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
-    ) : UniffiForeignFutureResultVoid(callStatus), ByValue
+        `callStatus`: UniffiRustCallStatus.ByValue = UniffiRustCallStatus.ByValue(),
+    ): UniffiForeignFutureResultVoid(`callStatus`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiForeignFutureResultVoid) {
-        callStatus = other.callStatus
+   internal fun uniffiSetValue(other: UniffiForeignFutureResultVoid) {
+        `callStatus` = other.`callStatus`
     }
 
 }
-
-internal interface UniffiForeignFutureCompleteVoid : Callback {
-    fun callback(callbackData: Long, result: UniffiForeignFutureResultVoid.UniffiByValue)
+internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
+    fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultVoid.UniffiByValue,)
 }
-
-internal interface UniffiCallbackInterfaceWarpEventListenerMethod0 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        uuid: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceWarpEventListenerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceWarpEventListenerMethod1 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        uuid: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceWarpEventListenerMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceWarpEventListenerMethod2 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        remoteUuid: RustBuffer.ByValue,
-        transferUuid: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceWarpEventListenerMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceWarpEventListenerMethod3 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        remoteUuid: RustBuffer.ByValue,
-        transferUuid: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceWarpEventListenerMethod3 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceWarpEventListenerMethod4 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        remoteUuid: RustBuffer.ByValue,
-        transferUuid: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceWarpEventListenerMethod4 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceWarpEventListenerMethod5 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        remoteUuid: RustBuffer.ByValue,
-        messageUuid: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceWarpEventListenerMethod5 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`messageUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceWarpEventListenerMethod6 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        remoteUuid: RustBuffer.ByValue,
-        messageUuid: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceWarpEventListenerMethod6 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`messageUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceVirtualFilesystemMethod0 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        path: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceVirtualFilesystemMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceVirtualFilesystemMethod1 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        path: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceVirtualFilesystemMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceVirtualFilesystemMethod2 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        path: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceVirtualFilesystemMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceVirtualFilesystemMethod3 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        path: RustBuffer.ByValue,
-        folder: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceVirtualFilesystemMethod3 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`folder`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceVirtualFilesystemMethod4 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        path: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteI32,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceVirtualFilesystemMethod4 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI32,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfaceVirtualFilesystemMethod5 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        path: RustBuffer.ByValue,
-        `file`: RustBuffer.ByValue,
-        uniffiFutureCallback: UniffiForeignFutureCompleteI32,
-        uniffiCallbackData: Long,
-        uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-    )
+internal interface UniffiCallbackInterfaceVirtualFilesystemMethod5 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`file`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI32,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,)
 }
-
-internal interface UniffiCallbackInterfacePowerManagerMethod0 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        uniffiOutReturn: Pointer, uniffiCallStatus: UniffiRustCallStatus,
-    )
+internal interface UniffiCallbackInterfacePowerManagerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
-
-internal interface UniffiCallbackInterfacePowerManagerMethod1 : Callback {
-    fun callback(
-        uniffiHandle: Long,
-        uniffiOutReturn: Pointer, uniffiCallStatus: UniffiRustCallStatus,
-    )
+internal interface UniffiCallbackInterfacePowerManagerMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
-
-@Structure.FieldOrder(
-    "uniffiFree",
-    "uniffiClone",
-    "onRemoteAdded",
-    "onRemoteUpdated",
-    "onTransferAdded",
-    "onTransferUpdated",
-    "onTransferRemoved",
-    "onMessageAdded",
-    "onMessageRemoved",
-)
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "onRemoteAdded", "onRemoteUpdated", "onTransferAdded", "onTransferUpdated", "onTransferRemoved", "onMessageAdded", "onMessageRemoved")
 internal open class UniffiVTableCallbackInterfaceWarpEventListener(
-    @JvmField internal var uniffiFree: UniffiCallbackInterfaceFree? = null,
-    @JvmField internal var uniffiClone: UniffiCallbackInterfaceClone? = null,
-    @JvmField internal var onRemoteAdded: UniffiCallbackInterfaceWarpEventListenerMethod0? = null,
-    @JvmField internal var onRemoteUpdated: UniffiCallbackInterfaceWarpEventListenerMethod1? = null,
-    @JvmField internal var onTransferAdded: UniffiCallbackInterfaceWarpEventListenerMethod2? = null,
-    @JvmField internal var onTransferUpdated: UniffiCallbackInterfaceWarpEventListenerMethod3? = null,
-    @JvmField internal var onTransferRemoved: UniffiCallbackInterfaceWarpEventListenerMethod4? = null,
-    @JvmField internal var onMessageAdded: UniffiCallbackInterfaceWarpEventListenerMethod5? = null,
-    @JvmField internal var onMessageRemoved: UniffiCallbackInterfaceWarpEventListenerMethod6? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `onRemoteAdded`: UniffiCallbackInterfaceWarpEventListenerMethod0? = null,
+    @JvmField internal var `onRemoteUpdated`: UniffiCallbackInterfaceWarpEventListenerMethod1? = null,
+    @JvmField internal var `onTransferAdded`: UniffiCallbackInterfaceWarpEventListenerMethod2? = null,
+    @JvmField internal var `onTransferUpdated`: UniffiCallbackInterfaceWarpEventListenerMethod3? = null,
+    @JvmField internal var `onTransferRemoved`: UniffiCallbackInterfaceWarpEventListenerMethod4? = null,
+    @JvmField internal var `onMessageAdded`: UniffiCallbackInterfaceWarpEventListenerMethod5? = null,
+    @JvmField internal var `onMessageRemoved`: UniffiCallbackInterfaceWarpEventListenerMethod6? = null,
 ) : Structure() {
     class UniffiByValue(
-        uniffiFree: UniffiCallbackInterfaceFree? = null,
-        uniffiClone: UniffiCallbackInterfaceClone? = null,
-        onRemoteAdded: UniffiCallbackInterfaceWarpEventListenerMethod0? = null,
-        onRemoteUpdated: UniffiCallbackInterfaceWarpEventListenerMethod1? = null,
-        onTransferAdded: UniffiCallbackInterfaceWarpEventListenerMethod2? = null,
-        onTransferUpdated: UniffiCallbackInterfaceWarpEventListenerMethod3? = null,
-        onTransferRemoved: UniffiCallbackInterfaceWarpEventListenerMethod4? = null,
-        onMessageAdded: UniffiCallbackInterfaceWarpEventListenerMethod5? = null,
-        onMessageRemoved: UniffiCallbackInterfaceWarpEventListenerMethod6? = null,
-    ) : UniffiVTableCallbackInterfaceWarpEventListener(
-        uniffiFree, uniffiClone, onRemoteAdded,
-        onRemoteUpdated,
-        onTransferAdded,
-        onTransferUpdated,
-        onTransferRemoved,
-        onMessageAdded,
-        onMessageRemoved,
-    ), ByValue
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `onRemoteAdded`: UniffiCallbackInterfaceWarpEventListenerMethod0? = null,
+        `onRemoteUpdated`: UniffiCallbackInterfaceWarpEventListenerMethod1? = null,
+        `onTransferAdded`: UniffiCallbackInterfaceWarpEventListenerMethod2? = null,
+        `onTransferUpdated`: UniffiCallbackInterfaceWarpEventListenerMethod3? = null,
+        `onTransferRemoved`: UniffiCallbackInterfaceWarpEventListenerMethod4? = null,
+        `onMessageAdded`: UniffiCallbackInterfaceWarpEventListenerMethod5? = null,
+        `onMessageRemoved`: UniffiCallbackInterfaceWarpEventListenerMethod6? = null,
+    ): UniffiVTableCallbackInterfaceWarpEventListener(`uniffiFree`,`uniffiClone`,`onRemoteAdded`,`onRemoteUpdated`,`onTransferAdded`,`onTransferUpdated`,`onTransferRemoved`,`onMessageAdded`,`onMessageRemoved`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceWarpEventListener) {
-        uniffiFree = other.uniffiFree
-        uniffiClone = other.uniffiClone
-        onRemoteAdded = other.onRemoteAdded
-        onRemoteUpdated = other.onRemoteUpdated
-        onTransferAdded = other.onTransferAdded
-        onTransferUpdated = other.onTransferUpdated
-        onTransferRemoved = other.onTransferRemoved
-        onMessageAdded = other.onMessageAdded
-        onMessageRemoved = other.onMessageRemoved
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceWarpEventListener) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `onRemoteAdded` = other.`onRemoteAdded`
+        `onRemoteUpdated` = other.`onRemoteUpdated`
+        `onTransferAdded` = other.`onTransferAdded`
+        `onTransferUpdated` = other.`onTransferUpdated`
+        `onTransferRemoved` = other.`onTransferRemoved`
+        `onMessageAdded` = other.`onMessageAdded`
+        `onMessageRemoved` = other.`onMessageRemoved`
     }
 
 }
-
-@Structure.FieldOrder(
-    "uniffiFree",
-    "uniffiClone",
-    "metadata",
-    "readDir",
-    "listDir",
-    "createDir",
-    "openFile",
-    "createFile",
-)
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "metadata", "readDir", "listDir", "createDir", "openFile", "createFile")
 internal open class UniffiVTableCallbackInterfaceVirtualFilesystem(
-    @JvmField internal var uniffiFree: UniffiCallbackInterfaceFree? = null,
-    @JvmField internal var uniffiClone: UniffiCallbackInterfaceClone? = null,
-    @JvmField internal var metadata: UniffiCallbackInterfaceVirtualFilesystemMethod0? = null,
-    @JvmField internal var readDir: UniffiCallbackInterfaceVirtualFilesystemMethod1? = null,
-    @JvmField internal var listDir: UniffiCallbackInterfaceVirtualFilesystemMethod2? = null,
-    @JvmField internal var createDir: UniffiCallbackInterfaceVirtualFilesystemMethod3? = null,
-    @JvmField internal var openFile: UniffiCallbackInterfaceVirtualFilesystemMethod4? = null,
-    @JvmField internal var createFile: UniffiCallbackInterfaceVirtualFilesystemMethod5? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `metadata`: UniffiCallbackInterfaceVirtualFilesystemMethod0? = null,
+    @JvmField internal var `readDir`: UniffiCallbackInterfaceVirtualFilesystemMethod1? = null,
+    @JvmField internal var `listDir`: UniffiCallbackInterfaceVirtualFilesystemMethod2? = null,
+    @JvmField internal var `createDir`: UniffiCallbackInterfaceVirtualFilesystemMethod3? = null,
+    @JvmField internal var `openFile`: UniffiCallbackInterfaceVirtualFilesystemMethod4? = null,
+    @JvmField internal var `createFile`: UniffiCallbackInterfaceVirtualFilesystemMethod5? = null,
 ) : Structure() {
     class UniffiByValue(
-        uniffiFree: UniffiCallbackInterfaceFree? = null,
-        uniffiClone: UniffiCallbackInterfaceClone? = null,
-        metadata: UniffiCallbackInterfaceVirtualFilesystemMethod0? = null,
-        readDir: UniffiCallbackInterfaceVirtualFilesystemMethod1? = null,
-        listDir: UniffiCallbackInterfaceVirtualFilesystemMethod2? = null,
-        createDir: UniffiCallbackInterfaceVirtualFilesystemMethod3? = null,
-        openFile: UniffiCallbackInterfaceVirtualFilesystemMethod4? = null,
-        createFile: UniffiCallbackInterfaceVirtualFilesystemMethod5? = null,
-    ) : UniffiVTableCallbackInterfaceVirtualFilesystem(
-        uniffiFree, uniffiClone, metadata,
-        readDir,
-        listDir,
-        createDir,
-        openFile,
-        createFile,
-    ), ByValue
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `metadata`: UniffiCallbackInterfaceVirtualFilesystemMethod0? = null,
+        `readDir`: UniffiCallbackInterfaceVirtualFilesystemMethod1? = null,
+        `listDir`: UniffiCallbackInterfaceVirtualFilesystemMethod2? = null,
+        `createDir`: UniffiCallbackInterfaceVirtualFilesystemMethod3? = null,
+        `openFile`: UniffiCallbackInterfaceVirtualFilesystemMethod4? = null,
+        `createFile`: UniffiCallbackInterfaceVirtualFilesystemMethod5? = null,
+    ): UniffiVTableCallbackInterfaceVirtualFilesystem(`uniffiFree`,`uniffiClone`,`metadata`,`readDir`,`listDir`,`createDir`,`openFile`,`createFile`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceVirtualFilesystem) {
-        uniffiFree = other.uniffiFree
-        uniffiClone = other.uniffiClone
-        metadata = other.metadata
-        readDir = other.readDir
-        listDir = other.listDir
-        createDir = other.createDir
-        openFile = other.openFile
-        createFile = other.createFile
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceVirtualFilesystem) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `metadata` = other.`metadata`
+        `readDir` = other.`readDir`
+        `listDir` = other.`listDir`
+        `createDir` = other.`createDir`
+        `openFile` = other.`openFile`
+        `createFile` = other.`createFile`
     }
 
 }
-
 @Structure.FieldOrder("uniffiFree", "uniffiClone", "acquireWakeLock", "releaseWakeLock")
 internal open class UniffiVTableCallbackInterfacePowerManager(
-    @JvmField internal var uniffiFree: UniffiCallbackInterfaceFree? = null,
-    @JvmField internal var uniffiClone: UniffiCallbackInterfaceClone? = null,
-    @JvmField internal var acquireWakeLock: UniffiCallbackInterfacePowerManagerMethod0? = null,
-    @JvmField internal var releaseWakeLock: UniffiCallbackInterfacePowerManagerMethod1? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `acquireWakeLock`: UniffiCallbackInterfacePowerManagerMethod0? = null,
+    @JvmField internal var `releaseWakeLock`: UniffiCallbackInterfacePowerManagerMethod1? = null,
 ) : Structure() {
     class UniffiByValue(
-        uniffiFree: UniffiCallbackInterfaceFree? = null,
-        uniffiClone: UniffiCallbackInterfaceClone? = null,
-        acquireWakeLock: UniffiCallbackInterfacePowerManagerMethod0? = null,
-        releaseWakeLock: UniffiCallbackInterfacePowerManagerMethod1? = null,
-    ) : UniffiVTableCallbackInterfacePowerManager(
-        uniffiFree, uniffiClone, acquireWakeLock,
-        releaseWakeLock,
-    ), ByValue
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `acquireWakeLock`: UniffiCallbackInterfacePowerManagerMethod0? = null,
+        `releaseWakeLock`: UniffiCallbackInterfacePowerManagerMethod1? = null,
+    ): UniffiVTableCallbackInterfacePowerManager(`uniffiFree`,`uniffiClone`,`acquireWakeLock`,`releaseWakeLock`,), Structure.ByValue
 
-    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfacePowerManager) {
-        uniffiFree = other.uniffiFree
-        uniffiClone = other.uniffiClone
-        acquireWakeLock = other.acquireWakeLock
-        releaseWakeLock = other.releaseWakeLock
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfacePowerManager) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `acquireWakeLock` = other.`acquireWakeLock`
+        `releaseWakeLock` = other.`releaseWakeLock`
     }
 
 }
@@ -977,488 +816,265 @@ internal open class UniffiVTableCallbackInterfacePowerManager(
 // We now use JNA's "direct mapping" - unclear if same considerations apply exactly.
 internal object IntegrityCheckingUniffiLib {
     init {
-        Native.register(
-            IntegrityCheckingUniffiLib::class.java,
-            findLibraryName(componentName = "warpinator"),
-        )
+        Native.register(IntegrityCheckingUniffiLib::class.java, findLibraryName(componentName = "warpinator"))
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
 
+    internal fun ensureInitialized() = Unit
     external fun uniffi_warpinator_checksum_func_set_virtual_filesystem(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_func_set_tracing_subscriber(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_accept_transfer(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_cancel_transfer(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_connect_remote(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_manual_connection(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_message(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_messages(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_remote(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_remote_picture(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_remotes(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_remove_message(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_remove_transfer(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_send_message(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_send_transfer_request(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_start(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_stop(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_stop_transfer(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_transfer(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_transfers(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_constructor_warpinator_new(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpeventlistener_on_remote_added(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpeventlistener_on_remote_updated(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_added(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_updated(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_removed(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpeventlistener_on_message_added(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpeventlistener_on_message_removed(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_virtualfilesystem_metadata(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_virtualfilesystem_read_dir(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_virtualfilesystem_list_dir(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_virtualfilesystem_create_dir(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_virtualfilesystem_open_file(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_virtualfilesystem_create_file(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_powermanager_acquire_wake_lock(
-    ): Short
-
+    ): Int
     external fun uniffi_warpinator_checksum_method_powermanager_release_wake_lock(
-    ): Short
-
+    ): Int
     external fun ffi_warpinator_uniffi_contract_version(
     ): Int
 
+        
 }
 
 internal object UniffiLib {
-
+    
     // The Cleaner for the whole library
     internal val CLEANER: UniffiCleaner by lazy {
         UniffiCleaner.create()
     }
+    
 
     init {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "warpinator"))
         uniffiCallbackInterfacePowerManager.register(this)
         uniffiCallbackInterfaceVirtualFilesystem.register(this)
         uniffiCallbackInterfaceWarpEventListener.register(this)
-
+        
     }
 
-    external fun uniffi_warpinator_fn_clone_warpinator(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    internal fun ensureInitialized() = Unit
+    external fun uniffi_warpinator_fn_clone_warpinator(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-
-    external fun uniffi_warpinator_fn_free_warpinator(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
-    )
-
-    external fun uniffi_warpinator_fn_constructor_warpinator_new(
-        config: RustBuffer.ByValue,
-        protocolConfig: RustBuffer.ByValue,
-        serviceName: RustBuffer.ByValue,
-        powerManager: Long,
-        uniffi_out_err: UniffiRustCallStatus,
+    external fun uniffi_warpinator_fn_free_warpinator(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_warpinator_fn_constructor_warpinator_new(`config`: RustBuffer.ByValue,`protocolConfig`: RustBuffer.ByValue,`serviceName`: RustBuffer.ByValue,`powerManager`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_accept_transfer(
-        ptr: Long, remoteUuid: RustBuffer.ByValue, transferUuid: RustBuffer.ByValue,
-        path: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_accept_transfer(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_cancel_transfer(
-        ptr: Long, remoteUuid: RustBuffer.ByValue,
-        transferUuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_cancel_transfer(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_connect_remote(
-        ptr: Long,
-        uuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_connect_remote(`ptr`: Long,`uuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_manual_connection(
-        ptr: Long,
-        url: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_manual_connection(`ptr`: Long,`url`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_message(
-        ptr: Long, remoteUuid: RustBuffer.ByValue,
-        messageUuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_message(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`messageUuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_messages(
-        ptr: Long,
-        remoteUuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_messages(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_remote(
-        ptr: Long,
-        uuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_remote(`ptr`: Long,`uuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_remote_picture(
-        ptr: Long,
-        uuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_remote_picture(`ptr`: Long,`uuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_remotes(
-        ptr: Long,
+    external fun uniffi_warpinator_fn_method_warpinator_remotes(`ptr`: Long,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_remove_message(
-        ptr: Long, remoteUuid: RustBuffer.ByValue,
-        messageUuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_remove_message(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`messageUuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_remove_transfer(
-        ptr: Long, remoteUuid: RustBuffer.ByValue,
-        transferUuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_remove_transfer(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_send_message(
-        ptr: Long, remoteUuid: RustBuffer.ByValue,
-        content: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_send_message(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_send_transfer_request(
-        ptr: Long, remoteUuid: RustBuffer.ByValue,
-        paths: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_send_transfer_request(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`paths`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_start(
-        ptr: Long,
-        listener: Long, uniffi_out_err: UniffiRustCallStatus,
-    )
-
-    external fun uniffi_warpinator_fn_method_warpinator_stop(
-        ptr: Long, uniffi_out_err: UniffiRustCallStatus,
-    )
-
-    external fun uniffi_warpinator_fn_method_warpinator_stop_transfer(
-        ptr: Long, remoteUuid: RustBuffer.ByValue, transferUuid: RustBuffer.ByValue,
-        error: Byte,
+    external fun uniffi_warpinator_fn_method_warpinator_start(`ptr`: Long,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_warpinator_fn_method_warpinator_stop(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_warpinator_fn_method_warpinator_stop_transfer(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`error`: Byte,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_transfer(
-        ptr: Long, remoteUuid: RustBuffer.ByValue,
-        transferUuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_transfer(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_method_warpinator_transfers(
-        ptr: Long,
-        remoteUuid: RustBuffer.ByValue,
+    external fun uniffi_warpinator_fn_method_warpinator_transfers(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,
     ): Long
-
-    external fun uniffi_warpinator_fn_init_callback_vtable_warpeventlistener(
-        vtable: UniffiVTableCallbackInterfaceWarpEventListener,
-    )
-
-    external fun uniffi_warpinator_fn_init_callback_vtable_virtualfilesystem(
-        vtable: UniffiVTableCallbackInterfaceVirtualFilesystem,
-    )
-
-    external fun uniffi_warpinator_fn_init_callback_vtable_powermanager(
-        vtable: UniffiVTableCallbackInterfacePowerManager,
-    )
-
-    external fun uniffi_warpinator_fn_func_set_virtual_filesystem(
-        vfs: Long, uniffi_out_err: UniffiRustCallStatus,
-    )
-
-    external fun uniffi_warpinator_fn_func_set_tracing_subscriber(
-        tag: RustBuffer.ByValue,
-        maxLevel: RustBuffer.ByValue, uniffi_out_err: UniffiRustCallStatus,
-    )
-
-    external fun ffi_warpinator_rustbuffer_alloc(
-        size: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun uniffi_warpinator_fn_init_callback_vtable_warpeventlistener(`vtable`: UniffiVTableCallbackInterfaceWarpEventListener,
+    ): Unit
+    external fun uniffi_warpinator_fn_init_callback_vtable_virtualfilesystem(`vtable`: UniffiVTableCallbackInterfaceVirtualFilesystem,
+    ): Unit
+    external fun uniffi_warpinator_fn_init_callback_vtable_powermanager(`vtable`: UniffiVTableCallbackInterfacePowerManager,
+    ): Unit
+    external fun uniffi_warpinator_fn_func_set_virtual_filesystem(`vfs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_warpinator_fn_func_set_tracing_subscriber(`tag`: RustBuffer.ByValue,`maxLevel`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun ffi_warpinator_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-
-    external fun ffi_warpinator_rustbuffer_from_bytes(
-        bytes: ForeignBytes.ByValue, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-
-    external fun ffi_warpinator_rustbuffer_free(
-        buf: RustBuffer.ByValue, uniffi_out_err: UniffiRustCallStatus,
-    )
-
-    external fun ffi_warpinator_rustbuffer_reserve(
-        buf: RustBuffer.ByValue,
-        additional: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun ffi_warpinator_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-
-    external fun ffi_warpinator_rust_future_poll_u8(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_u8(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_u8(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_u8(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
-    ): Byte
-
-    external fun ffi_warpinator_rust_future_poll_i8(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_i8(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_i8(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_i8(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
-    ): Byte
-
-    external fun ffi_warpinator_rust_future_poll_u16(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_u16(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_u16(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_u16(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
-    ): Short
-
-    external fun ffi_warpinator_rust_future_poll_i16(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_i16(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_i16(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_i16(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
-    ): Short
-
-    external fun ffi_warpinator_rust_future_poll_u32(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_u32(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_u32(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_u32(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_u8(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_u8(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
-
-    external fun ffi_warpinator_rust_future_poll_i32(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_i32(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_i32(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_i32(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_i8(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_i8(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun ffi_warpinator_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_u16(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_u16(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Int
-
-    external fun ffi_warpinator_rust_future_poll_u64(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_u64(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_u64(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_u64(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_i16(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_i16(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Short
+    external fun ffi_warpinator_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_u32(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_u32(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
+    external fun ffi_warpinator_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_i32(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_i32(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
+    external fun ffi_warpinator_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_u64(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_u64(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-
-    external fun ffi_warpinator_rust_future_poll_i64(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_i64(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_i64(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_i64(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_i64(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_i64(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-
-    external fun ffi_warpinator_rust_future_poll_f32(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_f32(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_f32(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_f32(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_f32(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_f32(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Float
-
-    external fun ffi_warpinator_rust_future_poll_f64(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_f64(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_f64(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_f64(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_f64(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_f64(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Double
-
-    external fun ffi_warpinator_rust_future_poll_rust_buffer(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_rust_buffer(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_rust_buffer(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_rust_buffer(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
+    external fun ffi_warpinator_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_rust_buffer(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_rust_buffer(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun ffi_warpinator_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_cancel_void(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_free_void(`handle`: Long,
+    ): Unit
+    external fun ffi_warpinator_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
 
-    external fun ffi_warpinator_rust_future_poll_void(
-        handle: Long, callback: UniffiRustFutureContinuationCallback,
-        callbackData: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_cancel_void(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_free_void(
-        handle: Long,
-    )
-
-    external fun ffi_warpinator_rust_future_complete_void(
-        handle: Long, uniffi_out_err: UniffiRustCallStatus,
-    )
-
+        
 }
 
 private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
@@ -1470,115 +1086,114 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI contract version mismatch: try cleaning and rebuilding your project")
     }
 }
-
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_warpinator_checksum_func_set_virtual_filesystem() != 64702.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_func_set_virtual_filesystem() and 0xFFFF) != 19958) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_func_set_tracing_subscriber() != 10288.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_func_set_tracing_subscriber() and 0xFFFF) != 28970) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_accept_transfer() != 21882.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_accept_transfer() and 0xFFFF) != 64585) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_cancel_transfer() != 40808.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_cancel_transfer() and 0xFFFF) != 44946) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_connect_remote() != 38324.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_connect_remote() and 0xFFFF) != 27967) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_manual_connection() != 25636.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_manual_connection() and 0xFFFF) != 16833) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_message() != 29560.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_message() and 0xFFFF) != 55444) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_messages() != 23088.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_messages() and 0xFFFF) != 35073) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_remote() != 4515.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_remote() and 0xFFFF) != 39976) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_remote_picture() != 64160.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_remote_picture() and 0xFFFF) != 54655) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_remotes() != 44038.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_remotes() and 0xFFFF) != 49631) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_remove_message() != 20406.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_remove_message() and 0xFFFF) != 6287) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_remove_transfer() != 44518.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_remove_transfer() and 0xFFFF) != 63745) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_send_message() != 57619.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_send_message() and 0xFFFF) != 63339) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_send_transfer_request() != 4066.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_send_transfer_request() and 0xFFFF) != 56247) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_start() != 4633.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_start() and 0xFFFF) != 42459) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_stop() != 52227.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_stop() and 0xFFFF) != 39688) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_stop_transfer() != 2338.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_stop_transfer() and 0xFFFF) != 9538) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_transfer() != 10815.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_transfer() and 0xFFFF) != 24552) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpinator_transfers() != 9176.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_transfers() and 0xFFFF) != 12154) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_constructor_warpinator_new() != 36511.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_constructor_warpinator_new() and 0xFFFF) != 47698) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpeventlistener_on_remote_added() != 55942.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpeventlistener_on_remote_added() and 0xFFFF) != 48346) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpeventlistener_on_remote_updated() != 53124.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpeventlistener_on_remote_updated() and 0xFFFF) != 63102) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_added() != 15260.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_added() and 0xFFFF) != 30706) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_updated() != 24748.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_updated() and 0xFFFF) != 22487) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_removed() != 2408.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpeventlistener_on_transfer_removed() and 0xFFFF) != 2775) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpeventlistener_on_message_added() != 27758.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpeventlistener_on_message_added() and 0xFFFF) != 13076) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_warpeventlistener_on_message_removed() != 16885.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_warpeventlistener_on_message_removed() and 0xFFFF) != 60985) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_virtualfilesystem_metadata() != 33968.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_virtualfilesystem_metadata() and 0xFFFF) != 23941) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_virtualfilesystem_read_dir() != 59682.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_virtualfilesystem_read_dir() and 0xFFFF) != 58090) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_virtualfilesystem_list_dir() != 4183.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_virtualfilesystem_list_dir() and 0xFFFF) != 3016) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_virtualfilesystem_create_dir() != 64912.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_virtualfilesystem_create_dir() and 0xFFFF) != 57546) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_virtualfilesystem_open_file() != 58628.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_virtualfilesystem_open_file() and 0xFFFF) != 36479) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_virtualfilesystem_create_file() != 15089.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_virtualfilesystem_create_file() and 0xFFFF) != 6096) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_powermanager_acquire_wake_lock() != 26291.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_powermanager_acquire_wake_lock() and 0xFFFF) != 51225) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_warpinator_checksum_method_powermanager_release_wake_lock() != 10585.toShort()) {
+    if ((lib.uniffi_warpinator_checksum_method_powermanager_release_wake_lock() and 0xFFFF) != 36261) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1586,11 +1201,11 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
 /**
  * @suppress
  */
-fun uniffiEnsureInitialized() {
-    IntegrityCheckingUniffiLib
-    // UniffiLib() initialized as objects are used, but we still need to explicitly
-    // reference it so initialization across crates works as expected.
-    UniffiLib
+public fun uniffiEnsureInitialized() {
+    // Call arbitrary methods on IntegrityCheckingUniffiLib and UniffiLib to ensure that
+    // their init blocks run. This ensures initialization across crates works as expected.
+    IntegrityCheckingUniffiLib.ensureInitialized()
+    UniffiLib.ensureInitialized()
 }
 
 // Async support
@@ -1602,19 +1217,19 @@ internal const val UNIFFI_RUST_FUTURE_POLL_WAKE = 1.toByte()
 internal val uniffiContinuationHandleMap = UniffiHandleMap<CancellableContinuation<Byte>>()
 
 // FFI type for Rust future continuations
-internal object uniffiRustFutureContinuationCallbackImpl : UniffiRustFutureContinuationCallback {
+internal object uniffiRustFutureContinuationCallbackImpl: UniffiRustFutureContinuationCallback {
     override fun callback(data: Long, pollResult: Byte) {
         uniffiContinuationHandleMap.remove(data).resume(pollResult)
     }
 }
 
-internal suspend fun <T, F, E : Exception> uniffiRustCallAsync(
+internal suspend fun<T, F, E: kotlin.Exception> uniffiRustCallAsync(
     rustFuture: Long,
     pollFunc: (Long, UniffiRustFutureContinuationCallback, Long) -> Unit,
     completeFunc: (Long, UniffiRustCallStatus) -> F,
     freeFunc: (Long) -> Unit,
     liftFunc: (F) -> T,
-    errorHandler: UniffiRustCallStatusErrorHandler<E>,
+    errorHandler: UniffiRustCallStatusErrorHandler<E>
 ): T {
     try {
         do {
@@ -1622,20 +1237,19 @@ internal suspend fun <T, F, E : Exception> uniffiRustCallAsync(
                 pollFunc(
                     rustFuture,
                     uniffiRustFutureContinuationCallbackImpl,
-                    uniffiContinuationHandleMap.insert(continuation),
+                    uniffiContinuationHandleMap.insert(continuation)
                 )
             }
-        } while (pollResult != UNIFFI_RUST_FUTURE_POLL_READY)
+        } while (pollResult != UNIFFI_RUST_FUTURE_POLL_READY);
 
         return liftFunc(
-            uniffiRustCallWithError(errorHandler, { status -> completeFunc(rustFuture, status) }),
+            uniffiRustCallWithError(errorHandler, { status -> completeFunc(rustFuture, status) })
         )
     } finally {
         freeFunc(rustFuture)
     }
 }
-
-internal inline fun <T> uniffiTraitInterfaceCallAsync(
+internal inline fun<T> uniffiTraitInterfaceCallAsync(
     crossinline makeCall: suspend () -> T,
     crossinline handleSuccess: (T) -> Unit,
     crossinline handleError: (UniffiRustCallStatus.ByValue) -> Unit,
@@ -1646,7 +1260,8 @@ internal inline fun <T> uniffiTraitInterfaceCallAsync(
     //
     // Uniffi does its best to support structured concurrency across the FFI.
     // If the Rust future is dropped, `uniffiForeignFutureDroppedCallbackImpl` is called, which will cancel the Kotlin coroutine if it's still running.
-    @OptIn(DelicateCoroutinesApi::class) val job = GlobalScope.launch coroutineBlock@{
+    @OptIn(DelicateCoroutinesApi::class)
+    val job = GlobalScope.launch coroutineBlock@ {
         // Note: it's important we call either `handleSuccess` or `handleError` exactly once.  Each
         // call consumes an Arc reference, which means there should be no possibility of a double
         // call.  The following code is structured so that will will never call both `handleSuccess`
@@ -1657,27 +1272,22 @@ internal inline fun <T> uniffiTraitInterfaceCallAsync(
         // double-freeing it.
         val callResult = try {
             makeCall()
-        } catch (e: Exception) {
+        } catch(e: kotlin.Exception) {
             handleError(
                 UniffiRustCallStatus.create(
                     UNIFFI_CALL_UNEXPECTED_ERROR,
                     FfiConverterString.lower(e.toString()),
-                ),
+                )
             )
             return@coroutineBlock
         }
         handleSuccess(callResult)
     }
     val handle = uniffiForeignFutureHandleMap.insert(job)
-    uniffiOutDroppedCallback.uniffiSetValue(
-        UniffiForeignFutureDroppedCallbackStruct(
-            handle,
-            uniffiForeignFutureDroppedCallbackImpl,
-        ),
-    )
+    uniffiOutDroppedCallback.uniffiSetValue(UniffiForeignFutureDroppedCallbackStruct(handle, uniffiForeignFutureDroppedCallbackImpl))
 }
 
-internal inline fun <T, reified E : Throwable> uniffiTraitInterfaceCallAsyncWithError(
+internal inline fun<T, reified E: Throwable> uniffiTraitInterfaceCallAsyncWithError(
     crossinline makeCall: suspend () -> T,
     crossinline handleSuccess: (T) -> Unit,
     crossinline handleError: (UniffiRustCallStatus.ByValue) -> Unit,
@@ -1685,25 +1295,26 @@ internal inline fun <T, reified E : Throwable> uniffiTraitInterfaceCallAsyncWith
     uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
 ) {
     // See uniffiTraitInterfaceCallAsync for details on `DelicateCoroutinesApi`
-    @OptIn(DelicateCoroutinesApi::class) val job = GlobalScope.launch coroutineBlock@{
+    @OptIn(DelicateCoroutinesApi::class)
+    val job = GlobalScope.launch coroutineBlock@ {
         // See the note in uniffiTraitInterfaceCallAsync for details on `handleSuccess` and
         // `handleError`.
         val callResult = try {
             makeCall()
-        } catch (e: Exception) {
+        } catch(e: kotlin.Exception) {
             if (e is E) {
                 handleError(
                     UniffiRustCallStatus.create(
                         UNIFFI_CALL_ERROR,
                         lowerError(e),
-                    ),
+                    )
                 )
             } else {
                 handleError(
                     UniffiRustCallStatus.create(
                         UNIFFI_CALL_UNEXPECTED_ERROR,
                         FfiConverterString.lower(e.toString()),
-                    ),
+                    )
                 )
             }
             return@coroutineBlock
@@ -1711,17 +1322,12 @@ internal inline fun <T, reified E : Throwable> uniffiTraitInterfaceCallAsyncWith
         handleSuccess(callResult)
     }
     val handle = uniffiForeignFutureHandleMap.insert(job)
-    uniffiOutDroppedCallback.uniffiSetValue(
-        UniffiForeignFutureDroppedCallbackStruct(
-            handle,
-            uniffiForeignFutureDroppedCallbackImpl,
-        ),
-    )
+    uniffiOutDroppedCallback.uniffiSetValue(UniffiForeignFutureDroppedCallbackStruct(handle, uniffiForeignFutureDroppedCallbackImpl))
 }
 
 internal val uniffiForeignFutureHandleMap = UniffiHandleMap<Job>()
 
-internal object uniffiForeignFutureDroppedCallbackImpl : UniffiForeignFutureDroppedCallback {
+internal object uniffiForeignFutureDroppedCallbackImpl: UniffiForeignFutureDroppedCallback {
     override fun callback(handle: Long) {
         val job = uniffiForeignFutureHandleMap.remove(handle)
         if (!job.isCompleted) {
@@ -1731,9 +1337,10 @@ internal object uniffiForeignFutureDroppedCallbackImpl : UniffiForeignFutureDrop
 }
 
 // For testing
-fun uniffiForeignFutureHandleCount() = uniffiForeignFutureHandleMap.size
+public fun uniffiForeignFutureHandleCount() = uniffiForeignFutureHandleMap.size
 
 // Public interface members begin here.
+
 
 // Interface implemented by anything that can contain an object reference.
 //
@@ -1745,7 +1352,6 @@ fun uniffiForeignFutureHandleCount() = uniffiForeignFutureHandleMap.size
 // helper method to execute a block and destroy the object at the end.
 interface Disposable {
     fun destroy()
-
     companion object {
         fun destroy(vararg args: Any?) {
             for (arg in args) {
@@ -1759,7 +1365,6 @@ interface Disposable {
                             }
                         }
                     }
-
                     is Map<*, *> -> {
                         for (element in arg.values) {
                             if (element is Disposable) {
@@ -1767,7 +1372,6 @@ interface Disposable {
                             }
                         }
                     }
-
                     is Iterable<*> -> {
                         for (element in arg) {
                             if (element is Disposable) {
@@ -1784,18 +1388,19 @@ interface Disposable {
 /**
  * @suppress
  */
-inline fun <T : Disposable?, R> T.use(block: (T) -> R) = try {
-    block(this)
-} finally {
+inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
     try {
-        // N.B. our implementation is on the nullable type `Disposable?`.
-        this?.destroy()
-    } catch (e: Throwable) {
-        // swallow
+        block(this)
+    } finally {
+        try {
+            // N.B. our implementation is on the nullable type `Disposable?`.
+            this?.destroy()
+        } catch (e: Throwable) {
+            // swallow
+        }
     }
-}
 
-/**
+/** 
  * Placeholder object used to signal that we're constructing an interface with a FFI handle.
  *
  * This is the first argument for interface constructors that input a raw handle. It exists is that
@@ -1806,16 +1411,14 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) = try {
  * */
 object UniffiWithHandle
 
-/**
+/** 
  * Used to instantiate an interface without an actual pointer, for fakes in tests, mostly.
  *
  * @suppress
  * */
 object NoHandle// Magic number for the Rust proxy to call using the same mechanism as every other method,
-
 // to free the callback once it's dropped by Rust.
 internal const val IDX_CALLBACK_FREE = 0
-
 // Callback return codes
 internal const val UNIFFI_CALLBACK_SUCCESS = 0
 internal const val UNIFFI_CALLBACK_ERROR = 1
@@ -1824,8 +1427,7 @@ internal const val UNIFFI_CALLBACK_UNEXPECTED_ERROR = 2
 /**
  * @suppress
  */
-abstract class FfiConverterCallbackInterface<CallbackInterface : Any> :
-        FfiConverter<CallbackInterface, Long> {
+public abstract class FfiConverterCallbackInterface<CallbackInterface: Any>: FfiConverter<CallbackInterface, Long> {
     internal val handleMap = UniffiHandleMap<CallbackInterface>()
 
     internal fun drop(handle: Long) {
@@ -1846,7 +1448,6 @@ abstract class FfiConverterCallbackInterface<CallbackInterface : Any> :
         buf.putLong(lower(value))
     }
 }
-
 /**
  * The cleaner interface for Object finalization code to run.
  * This is the entry point to any implementation that we're using.
@@ -1862,7 +1463,7 @@ interface UniffiCleaner {
         fun clean()
     }
 
-    fun register(value: Any, cleanUpTask: Runnable): Cleanable
+    fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable
 
     companion object
 }
@@ -1881,10 +1482,12 @@ private class UniffiJnaCleanable(
     override fun clean() = cleanable.clean()
 }
 
+
 // We decide at uniffi binding generation time whether we were
 // using Android or not.
 // There are further runtime checks to chose the correct implementation
 // of the cleaner.
+
 
 private fun UniffiCleaner.Companion.create(): UniffiCleaner =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -1913,8 +1516,12 @@ private class AndroidSystemCleanable(
 /**
  * @suppress
  */
-object FfiConverterUByte : FfiConverter<UByte, Byte> {
+public object FfiConverterUByte: FfiConverter<UByte, Byte> {
     override fun lift(value: Byte): UByte {
+        return value.toUByte()
+    }
+
+    fun lift(value: Int): UByte {
         return value.toUByte()
     }
 
@@ -1936,8 +1543,12 @@ object FfiConverterUByte : FfiConverter<UByte, Byte> {
 /**
  * @suppress
  */
-object FfiConverterUShort : FfiConverter<UShort, Short> {
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
     override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    fun lift(value: Int): UShort {
         return value.toUShort()
     }
 
@@ -1959,7 +1570,7 @@ object FfiConverterUShort : FfiConverter<UShort, Short> {
 /**
  * @suppress
  */
-object FfiConverterInt : FfiConverter<Int, Int> {
+public object FfiConverterInt: FfiConverter<Int, Int> {
     override fun lift(value: Int): Int {
         return value
     }
@@ -1982,7 +1593,7 @@ object FfiConverterInt : FfiConverter<Int, Int> {
 /**
  * @suppress
  */
-object FfiConverterULong : FfiConverter<ULong, Long> {
+public object FfiConverterULong: FfiConverter<ULong, Long> {
     override fun lift(value: Long): ULong {
         return value.toULong()
     }
@@ -2005,7 +1616,7 @@ object FfiConverterULong : FfiConverter<ULong, Long> {
 /**
  * @suppress
  */
-object FfiConverterBoolean : FfiConverter<Boolean, Byte> {
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
     override fun lift(value: Byte): Boolean {
         return value.toInt() != 0
     }
@@ -2028,7 +1639,7 @@ object FfiConverterBoolean : FfiConverter<Boolean, Byte> {
 /**
  * @suppress
  */
-object FfiConverterString : FfiConverter<String, RustBuffer.ByValue> {
+public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     // Note: we don't inherit from FfiConverterRustBuffer, because we use a
     // special encoding when lowering/lifting.  We can use `RustBuffer.len` to
     // store our length and avoid writing it out to the buffer.
@@ -2085,28 +1696,27 @@ object FfiConverterString : FfiConverter<String, RustBuffer.ByValue> {
 /**
  * @suppress
  */
-object FfiConverterByteArray : FfiConverterRustBuffer<ByteArray> {
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
     override fun read(buf: ByteBuffer): ByteArray {
         val len = buf.getInt()
         val byteArr = ByteArray(len)
         buf.get(byteArr)
         return byteArr
     }
-
     override fun allocationSize(value: ByteArray): ULong {
         return 4UL + value.size.toULong()
     }
-
     override fun write(value: ByteArray, buf: ByteBuffer) {
         buf.putInt(value.size)
         buf.put(value)
     }
 }
 
+
 /**
  * @suppress
  */
-object FfiConverterDuration : FfiConverterRustBuffer<java.time.Duration> {
+public object FfiConverterDuration: FfiConverterRustBuffer<java.time.Duration> {
     override fun read(buf: ByteBuffer): java.time.Duration {
         // Type mismatch (should be u64) but we check for overflow/underflow below
         val seconds = buf.getLong()
@@ -2142,6 +1752,7 @@ object FfiConverterDuration : FfiConverterRustBuffer<java.time.Duration> {
         buf.putInt(value.nano)
     }
 }
+
 
 // This template implements a class for working with a Rust struct via a handle
 // to the live Rust struct on the other side of the FFI.
@@ -2237,61 +1848,55 @@ object FfiConverterDuration : FfiConverterRustBuffer<java.time.Duration> {
 // [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
 //
 
-interface WarpinatorInterface {
 
-    suspend fun acceptTransfer(
-        remoteUuid: String,
-        transferUuid: String,
-        path: String,
-    )
-
-    suspend fun cancelTransfer(remoteUuid: String, transferUuid: String)
-
-    suspend fun connectRemote(uuid: String)
-
-    suspend fun manualConnection(url: String)
-
-    suspend fun message(remoteUuid: String, messageUuid: String): Message
-
-    suspend fun messages(remoteUuid: String): List<Message>
-
-    suspend fun remote(uuid: String): Remote
-
-    suspend fun remotePicture(uuid: String): ByteArray
-
-    suspend fun remotes(): List<Remote>
-
-    suspend fun removeMessage(remoteUuid: String, messageUuid: String)
-
-    suspend fun removeTransfer(remoteUuid: String, transferUuid: String)
-
-    suspend fun sendMessage(remoteUuid: String, content: String)
-
-    suspend fun sendTransferRequest(remoteUuid: String, paths: List<String>)
-
-    fun start(listener: WarpEventListener)
-
-    fun stop()
-
-    suspend fun stopTransfer(
-        remoteUuid: String,
-        transferUuid: String,
-        error: Boolean,
-    )
-
-    suspend fun transfer(remoteUuid: String, transferUuid: String): Transfer
-
-    suspend fun transfers(remoteUuid: String): List<Transfer>
-
+public interface WarpinatorInterface {
+    
+    suspend fun `acceptTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String, `path`: kotlin.String)
+    
+    suspend fun `cancelTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String)
+    
+    suspend fun `connectRemote`(`uuid`: kotlin.String)
+    
+    suspend fun `manualConnection`(`url`: kotlin.String)
+    
+    suspend fun `message`(`remoteUuid`: kotlin.String, `messageUuid`: kotlin.String): Message
+    
+    suspend fun `messages`(`remoteUuid`: kotlin.String): List<Message>
+    
+    suspend fun `remote`(`uuid`: kotlin.String): Remote
+    
+    suspend fun `remotePicture`(`uuid`: kotlin.String): kotlin.ByteArray
+    
+    suspend fun `remotes`(): List<Remote>
+    
+    suspend fun `removeMessage`(`remoteUuid`: kotlin.String, `messageUuid`: kotlin.String)
+    
+    suspend fun `removeTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String)
+    
+    suspend fun `sendMessage`(`remoteUuid`: kotlin.String, `content`: kotlin.String)
+    
+    suspend fun `sendTransferRequest`(`remoteUuid`: kotlin.String, `paths`: List<kotlin.String>)
+    
+    fun `start`(`listener`: WarpEventListener)
+    
+    fun `stop`()
+    
+    suspend fun `stopTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String, `error`: kotlin.Boolean)
+    
+    suspend fun `transfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String): Transfer
+    
+    suspend fun `transfers`(`remoteUuid`: kotlin.String): List<Transfer>
+    
     companion object
 }
 
-open class Warpinator : Disposable, AutoCloseable, WarpinatorInterface {
+open class Warpinator: Disposable, AutoCloseable, WarpinatorInterface
+{
 
     @Suppress("UNUSED_PARAMETER")
-            /**
-             * @suppress
-             */
+    /**
+     * @suppress
+     */
     constructor(withHandle: UniffiWithHandle, handle: Long) {
         this.handle = handle
         this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
@@ -2309,30 +1914,17 @@ open class Warpinator : Disposable, AutoCloseable, WarpinatorInterface {
         this.handle = 0
         this.cleanable = null
     }
-
-    constructor(
-        config: UserConfig,
-        protocolConfig: ProtocolConfig?,
-        serviceName: String,
-        powerManager: PowerManager,
-    ) : this(
-        UniffiWithHandle,
-        uniffiRustCallWithError(WarpException) { _status ->
-            UniffiLib.uniffi_warpinator_fn_constructor_warpinator_new(
-
-                FfiConverterTypeUserConfig.lower(config),
-                FfiConverterOptionalTypeProtocolConfig.lower(
-                    protocolConfig,
-                ),
-                FfiConverterString.lower(
-                    serviceName,
-                ),
-                FfiConverterTypePowerManager.lower(
-                    powerManager,
-                ),
-                _status,
-            )
-        },
+    constructor(`config`: UserConfig, `protocolConfig`: ProtocolConfig?, `serviceName`: kotlin.String, `powerManager`: PowerManager) :
+        this(UniffiWithHandle, 
+    uniffiRustCallWithError(WarpException) { _status ->
+    UniffiLib.uniffi_warpinator_fn_constructor_warpinator_new(
+    
+        
+        FfiConverterTypeUserConfig.lower(`config`),
+        FfiConverterOptionalTypeProtocolConfig.lower(`protocolConfig`),
+        FfiConverterString.lower(`serviceName`),
+        FfiConverterTypePowerManager.lower(`powerManager`),_status)
+}
     )
 
     protected val handle: Long
@@ -2340,6 +1932,11 @@ open class Warpinator : Disposable, AutoCloseable, WarpinatorInterface {
 
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
 
     override fun destroy() {
         // Only allow a single call to this method.
@@ -2368,7 +1965,7 @@ open class Warpinator : Disposable, AutoCloseable, WarpinatorInterface {
             if (c == Long.MAX_VALUE) {
                 throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
             }
-        } while (!this.callCounter.compareAndSet(c, c + 1L))
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
         // Now we can safely do the method call without the handle being freed concurrently.
         try {
             return block(this.uniffiCloneHandle())
@@ -2386,7 +1983,7 @@ open class Warpinator : Disposable, AutoCloseable, WarpinatorInterface {
         override fun run() {
             if (handle == 0.toLong()) {
                 // Fake object created with `NoHandle`, don't try to free.
-                return
+                return;
             }
             uniffiRustCall { status ->
                 UniffiLib.uniffi_warpinator_fn_free_warpinator(handle, status)
@@ -2399,568 +1996,429 @@ open class Warpinator : Disposable, AutoCloseable, WarpinatorInterface {
      */
     fun uniffiCloneHandle(): Long {
         if (handle == 0.toLong()) {
-            throw InternalException("uniffiCloneHandle() called on NoHandle object")
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
         }
-        return uniffiRustCall { status ->
+        return uniffiRustCall() { status ->
             UniffiLib.uniffi_warpinator_fn_clone_warpinator(handle, status)
         }
     }
 
+    
     @Throws(WarpException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun acceptTransfer(
-        remoteUuid: String,
-        transferUuid: String,
-        path: String,
-    ) {
+    override suspend fun `acceptTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String, `path`: kotlin.String) {
         return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_accept_transfer(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(transferUuid),
-                    FfiConverterString.lower(
-                        path,
-                    ),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_accept_transfer(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`transferUuid`),
+        FfiConverterString.lower(`path`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
     }
 
+    
     @Throws(WarpException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun cancelTransfer(remoteUuid: String, transferUuid: String) {
+    override suspend fun `cancelTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String) {
         return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_cancel_transfer(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(transferUuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_cancel_transfer(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`transferUuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
     }
 
+    
     @Throws(WarpException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun connectRemote(uuid: String) {
+    override suspend fun `connectRemote`(`uuid`: kotlin.String) {
         return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_connect_remote(
-                    uniffiHandle,
-                    FfiConverterString.lower(uuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_connect_remote(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`uuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
     }
 
+    
     @Throws(ManualConnectionException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun manualConnection(url: String) {
+    override suspend fun `manualConnection`(`url`: kotlin.String) {
         return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_manual_connection(
-                    uniffiHandle,
-                    FfiConverterString.lower(url),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            ManualConnectionException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun message(remoteUuid: String, messageUuid: String): Message {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_message(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(messageUuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
-            // lift function
-            { FfiConverterTypeMessage.lift(it) },
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun messages(remoteUuid: String): List<Message> {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_messages(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
-            // lift function
-            { FfiConverterSequenceTypeMessage.lift(it) },
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun remote(uuid: String): Remote {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_remote(
-                    uniffiHandle,
-                    FfiConverterString.lower(uuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
-            // lift function
-            { FfiConverterTypeRemote.lift(it) },
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun remotePicture(uuid: String): ByteArray {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_remote_picture(
-                    uniffiHandle,
-                    FfiConverterString.lower(uuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
-            // lift function
-            { FfiConverterByteArray.lift(it) },
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun remotes(): List<Remote> {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_remotes(
-                    uniffiHandle,
-
-                    )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
-            // lift function
-            { FfiConverterSequenceTypeRemote.lift(it) },
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun removeMessage(remoteUuid: String, messageUuid: String) {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_remove_message(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(messageUuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun removeTransfer(remoteUuid: String, transferUuid: String) {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_remove_transfer(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(transferUuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun sendMessage(remoteUuid: String, content: String) {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_send_message(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(content),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun sendTransferRequest(
-        remoteUuid: String,
-        paths: List<String>,
-    ) {
-        return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_send_transfer_request(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterSequenceString.lower(paths),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
-    }
-
-    @Throws(WarpException::class)
-    override fun start(listener: WarpEventListener) = callWithHandle {
-        uniffiRustCallWithError(WarpException) { _status ->
-            UniffiLib.uniffi_warpinator_fn_method_warpinator_start(
-                it,
-                FfiConverterTypeWarpEventListener.lower(listener), _status,
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_manual_connection(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`url`),
             )
-        }
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        ManualConnectionException.ErrorHandler,
+    )
     }
 
-    override fun stop() = callWithHandle {
-        uniffiRustCall { _status ->
-            UniffiLib.uniffi_warpinator_fn_method_warpinator_stop(
-                it,
-                _status,
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `message`(`remoteUuid`: kotlin.String, `messageUuid`: kotlin.String) : Message {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_message(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`messageUuid`),
             )
-        }
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeMessage.lift(it) },
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
     }
 
+    
     @Throws(WarpException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun stopTransfer(
-        remoteUuid: String,
-        transferUuid: String,
-        error: Boolean,
-    ) {
+    override suspend fun `messages`(`remoteUuid`: kotlin.String) : List<Message> {
         return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_stop_transfer(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(transferUuid),
-                    FfiConverterBoolean.lower(
-                        error,
-                    ),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_void(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_void(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
-            // lift function
-            { },
-
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_messages(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeMessage.lift(it) },
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
     }
 
+    
     @Throws(WarpException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun transfer(
-        remoteUuid: String,
-        transferUuid: String,
-    ): Transfer {
+    override suspend fun `remote`(`uuid`: kotlin.String) : Remote {
         return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_transfer(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid), FfiConverterString.lower(transferUuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
-            // lift function
-            { FfiConverterTypeTransfer.lift(it) },
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_remote(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`uuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeRemote.lift(it) },
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
     }
 
+    
     @Throws(WarpException::class)
     @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-    override suspend fun transfers(remoteUuid: String): List<Transfer> {
+    override suspend fun `remotePicture`(`uuid`: kotlin.String) : kotlin.ByteArray {
         return uniffiRustCallAsync(
-            callWithHandle { uniffiHandle ->
-                UniffiLib.uniffi_warpinator_fn_method_warpinator_transfers(
-                    uniffiHandle,
-                    FfiConverterString.lower(remoteUuid),
-                )
-            },
-            { future, callback, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(
-                    future,
-                    callback,
-                    continuation,
-                )
-            },
-            { future, continuation ->
-                UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(
-                    future,
-                    continuation,
-                )
-            },
-            { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
-            // lift function
-            { FfiConverterSequenceTypeTransfer.lift(it) },
-            // Error FFI converter
-            WarpException.ErrorHandler,
-        )
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_remote_picture(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`uuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterByteArray.lift(it) },
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
     }
 
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `remotes`() : List<Remote> {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_remotes(
+                uniffiHandle,
+                
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeRemote.lift(it) },
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `removeMessage`(`remoteUuid`: kotlin.String, `messageUuid`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_remove_message(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`messageUuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `removeTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_remove_transfer(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`transferUuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendMessage`(`remoteUuid`: kotlin.String, `content`: kotlin.String) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_send_message(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`content`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `sendTransferRequest`(`remoteUuid`: kotlin.String, `paths`: List<kotlin.String>) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_send_transfer_request(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterSequenceString.lower(`paths`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(WarpException::class)override fun `start`(`listener`: WarpEventListener)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(WarpException) { _status ->
+    UniffiLib.uniffi_warpinator_fn_method_warpinator_start(
+        it,
+        
+        FfiConverterTypeWarpEventListener.lower(`listener`),_status)
+}
+    }
+    
+    
+
+    override fun `stop`()
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_warpinator_fn_method_warpinator_stop(
+        it,
+        _status)
+}
+    }
+    
+    
+
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `stopTransfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String, `error`: kotlin.Boolean) {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_stop_transfer(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`transferUuid`),
+        FfiConverterBoolean.lower(`error`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_void(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_void(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_void(future) },
+        // lift function
+        { },
+        
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `transfer`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String) : Transfer {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_transfer(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+        FfiConverterString.lower(`transferUuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterTypeTransfer.lift(it) },
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+    @Throws(WarpException::class)
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+    override suspend fun `transfers`(`remoteUuid`: kotlin.String) : List<Transfer> {
+        return uniffiRustCallAsync(
+        callWithHandle { uniffiHandle ->
+            UniffiLib.uniffi_warpinator_fn_method_warpinator_transfers(
+                uniffiHandle,
+                
+        FfiConverterString.lower(`remoteUuid`),
+            )
+        },
+        { future, callback, continuation -> UniffiLib.ffi_warpinator_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_warpinator_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_warpinator_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeTransfer.lift(it) },
+        // Error FFI converter
+        WarpException.ErrorHandler,
+    )
+    }
+
+    
+
+    
+
+
+    
+    
     /**
      * @suppress
      */
     companion object
-
+    
 }
+
 
 /**
  * @suppress
  */
-object FfiConverterTypeWarpinator : FfiConverter<Warpinator, Long> {
+public object FfiConverterTypeWarpinator: FfiConverter<Warpinator, Long> {
     override fun lower(value: Warpinator): Long {
         return value.uniffiCloneHandle()
     }
@@ -2980,22 +2438,32 @@ object FfiConverterTypeWarpinator : FfiConverter<Warpinator, Long> {
     }
 }
 
-data class Message(
-    var uuid: String,
-    var remoteUuid: String,
-    var direction: Direction,
-    var timestamp: ULong,
-    var content: String,
 
-    ) {
 
+data class Message (
+    var `uuid`: kotlin.String
+    , 
+    var `remoteUuid`: kotlin.String
+    , 
+    var `direction`: Direction
+    , 
+    var `timestamp`: kotlin.ULong
+    , 
+    var `content`: kotlin.String
+    
+){
+    
+
+    
+
+    
     companion object
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeMessage : FfiConverterRustBuffer<Message> {
+public object FfiConverterTypeMessage: FfiConverterRustBuffer<Message> {
     override fun read(buf: ByteBuffer): Message {
         return Message(
             FfiConverterString.read(buf),
@@ -3006,37 +2474,47 @@ object FfiConverterTypeMessage : FfiConverterRustBuffer<Message> {
         )
     }
 
-    override fun allocationSize(value: Message) =
-        (FfiConverterString.allocationSize(value.uuid) + FfiConverterString.allocationSize(value.remoteUuid) + FfiConverterTypeDirection.allocationSize(
-            value.direction,
-        ) + FfiConverterULong.allocationSize(value.timestamp) + FfiConverterString.allocationSize(
-            value.content,
-        ))
+    override fun allocationSize(value: Message) = (
+            FfiConverterString.allocationSize(value.`uuid`) +
+            FfiConverterString.allocationSize(value.`remoteUuid`) +
+            FfiConverterTypeDirection.allocationSize(value.`direction`) +
+            FfiConverterULong.allocationSize(value.`timestamp`) +
+            FfiConverterString.allocationSize(value.`content`)
+    )
 
     override fun write(value: Message, buf: ByteBuffer) {
-        FfiConverterString.write(value.uuid, buf)
-        FfiConverterString.write(value.remoteUuid, buf)
-        FfiConverterTypeDirection.write(value.direction, buf)
-        FfiConverterULong.write(value.timestamp, buf)
-        FfiConverterString.write(value.content, buf)
+            FfiConverterString.write(value.`uuid`, buf)
+            FfiConverterString.write(value.`remoteUuid`, buf)
+            FfiConverterTypeDirection.write(value.`direction`, buf)
+            FfiConverterULong.write(value.`timestamp`, buf)
+            FfiConverterString.write(value.`content`, buf)
     }
 }
 
-data class ProtocolConfig(
-    var reconnectInterval: java.time.Duration?,
-    var connectTimeout: java.time.Duration?,
-    var pingInterval: java.time.Duration?,
-    var pingTimeout: java.time.Duration?,
 
-    ) {
 
+data class ProtocolConfig (
+    var `reconnectInterval`: java.time.Duration?
+    , 
+    var `connectTimeout`: java.time.Duration?
+    , 
+    var `pingInterval`: java.time.Duration?
+    , 
+    var `pingTimeout`: java.time.Duration?
+    
+){
+    
+
+    
+
+    
     companion object
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeProtocolConfig : FfiConverterRustBuffer<ProtocolConfig> {
+public object FfiConverterTypeProtocolConfig: FfiConverterRustBuffer<ProtocolConfig> {
     override fun read(buf: ByteBuffer): ProtocolConfig {
         return ProtocolConfig(
             FfiConverterOptionalDuration.read(buf),
@@ -3046,49 +2524,68 @@ object FfiConverterTypeProtocolConfig : FfiConverterRustBuffer<ProtocolConfig> {
         )
     }
 
-    override fun allocationSize(value: ProtocolConfig) =
-        (FfiConverterOptionalDuration.allocationSize(value.reconnectInterval) + FfiConverterOptionalDuration.allocationSize(
-            value.connectTimeout,
-        ) + FfiConverterOptionalDuration.allocationSize(value.pingInterval) + FfiConverterOptionalDuration.allocationSize(
-            value.pingTimeout,
-        ))
+    override fun allocationSize(value: ProtocolConfig) = (
+            FfiConverterOptionalDuration.allocationSize(value.`reconnectInterval`) +
+            FfiConverterOptionalDuration.allocationSize(value.`connectTimeout`) +
+            FfiConverterOptionalDuration.allocationSize(value.`pingInterval`) +
+            FfiConverterOptionalDuration.allocationSize(value.`pingTimeout`)
+    )
 
     override fun write(value: ProtocolConfig, buf: ByteBuffer) {
-        FfiConverterOptionalDuration.write(value.reconnectInterval, buf)
-        FfiConverterOptionalDuration.write(value.connectTimeout, buf)
-        FfiConverterOptionalDuration.write(value.pingInterval, buf)
-        FfiConverterOptionalDuration.write(value.pingTimeout, buf)
+            FfiConverterOptionalDuration.write(value.`reconnectInterval`, buf)
+            FfiConverterOptionalDuration.write(value.`connectTimeout`, buf)
+            FfiConverterOptionalDuration.write(value.`pingInterval`, buf)
+            FfiConverterOptionalDuration.write(value.`pingTimeout`, buf)
     }
 }
 
-data class Remote(
-    var uuid: String,
-    var ip: String,
-    var port: UShort,
-    var authPort: UShort,
-    var serviceName: String,
-    var displayName: String,
-    var username: String,
-    var hostname: String,
+
+
+data class Remote (
+    var `uuid`: kotlin.String
+    , 
+    var `ip`: kotlin.String
+    , 
+    var `port`: kotlin.UShort
+    , 
+    var `authPort`: kotlin.UShort
+    , 
+    var `serviceName`: kotlin.String
+    , 
+    var `displayName`: kotlin.String
+    , 
+    var `username`: kotlin.String
+    , 
+    var `hostname`: kotlin.String
+    , 
     /**
      * Whether the remote has a picture or not
      */
-    var picture: Boolean,
-    var pictureVersion: UByte,
-    var state: RemoteState,
-    var serviceStatic: Boolean,
-    var serviceAvailable: Boolean,
-    var messageSupport: Boolean,
+    var `picture`: kotlin.Boolean
+    , 
+    var `pictureVersion`: kotlin.UByte
+    , 
+    var `state`: RemoteState
+    , 
+    var `serviceStatic`: kotlin.Boolean
+    , 
+    var `serviceAvailable`: kotlin.Boolean
+    , 
+    var `messageSupport`: kotlin.Boolean
+    
+){
+    
 
-    ) {
+    
 
+    
     companion object
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeRemote : FfiConverterRustBuffer<Remote> {
+public object FfiConverterTypeRemote: FfiConverterRustBuffer<Remote> {
     override fun read(buf: ByteBuffer): Remote {
         return Remote(
             FfiConverterString.read(buf),
@@ -3108,102 +2605,121 @@ object FfiConverterTypeRemote : FfiConverterRustBuffer<Remote> {
         )
     }
 
-    override fun allocationSize(value: Remote) =
-        (FfiConverterString.allocationSize(value.uuid) + FfiConverterString.allocationSize(value.ip) + FfiConverterUShort.allocationSize(
-            value.port,
-        ) + FfiConverterUShort.allocationSize(value.authPort) + FfiConverterString.allocationSize(
-            value.serviceName,
-        ) + FfiConverterString.allocationSize(value.displayName) + FfiConverterString.allocationSize(
-            value.username,
-        ) + FfiConverterString.allocationSize(value.hostname) + FfiConverterBoolean.allocationSize(
-            value.picture,
-        ) + FfiConverterUByte.allocationSize(value.pictureVersion) + FfiConverterTypeRemoteState.allocationSize(
-            value.state,
-        ) + FfiConverterBoolean.allocationSize(value.serviceStatic) + FfiConverterBoolean.allocationSize(
-            value.serviceAvailable,
-        ) + FfiConverterBoolean.allocationSize(value.messageSupport))
+    override fun allocationSize(value: Remote) = (
+            FfiConverterString.allocationSize(value.`uuid`) +
+            FfiConverterString.allocationSize(value.`ip`) +
+            FfiConverterUShort.allocationSize(value.`port`) +
+            FfiConverterUShort.allocationSize(value.`authPort`) +
+            FfiConverterString.allocationSize(value.`serviceName`) +
+            FfiConverterString.allocationSize(value.`displayName`) +
+            FfiConverterString.allocationSize(value.`username`) +
+            FfiConverterString.allocationSize(value.`hostname`) +
+            FfiConverterBoolean.allocationSize(value.`picture`) +
+            FfiConverterUByte.allocationSize(value.`pictureVersion`) +
+            FfiConverterTypeRemoteState.allocationSize(value.`state`) +
+            FfiConverterBoolean.allocationSize(value.`serviceStatic`) +
+            FfiConverterBoolean.allocationSize(value.`serviceAvailable`) +
+            FfiConverterBoolean.allocationSize(value.`messageSupport`)
+    )
 
     override fun write(value: Remote, buf: ByteBuffer) {
-        FfiConverterString.write(value.uuid, buf)
-        FfiConverterString.write(value.ip, buf)
-        FfiConverterUShort.write(value.port, buf)
-        FfiConverterUShort.write(value.authPort, buf)
-        FfiConverterString.write(value.serviceName, buf)
-        FfiConverterString.write(value.displayName, buf)
-        FfiConverterString.write(value.username, buf)
-        FfiConverterString.write(value.hostname, buf)
-        FfiConverterBoolean.write(value.picture, buf)
-        FfiConverterUByte.write(value.pictureVersion, buf)
-        FfiConverterTypeRemoteState.write(value.state, buf)
-        FfiConverterBoolean.write(value.serviceStatic, buf)
-        FfiConverterBoolean.write(value.serviceAvailable, buf)
-        FfiConverterBoolean.write(value.messageSupport, buf)
+            FfiConverterString.write(value.`uuid`, buf)
+            FfiConverterString.write(value.`ip`, buf)
+            FfiConverterUShort.write(value.`port`, buf)
+            FfiConverterUShort.write(value.`authPort`, buf)
+            FfiConverterString.write(value.`serviceName`, buf)
+            FfiConverterString.write(value.`displayName`, buf)
+            FfiConverterString.write(value.`username`, buf)
+            FfiConverterString.write(value.`hostname`, buf)
+            FfiConverterBoolean.write(value.`picture`, buf)
+            FfiConverterUByte.write(value.`pictureVersion`, buf)
+            FfiConverterTypeRemoteState.write(value.`state`, buf)
+            FfiConverterBoolean.write(value.`serviceStatic`, buf)
+            FfiConverterBoolean.write(value.`serviceAvailable`, buf)
+            FfiConverterBoolean.write(value.`messageSupport`, buf)
     }
 }
 
-data class Transfer(
+
+
+data class Transfer (
     /**
      * Unique identifier for this transfer
      */
-    var uuid: String,
+    var `uuid`: kotlin.String
+    , 
     /**
      * Unique identifier of the parent remote
      */
-    var remoteUuid: String,
+    var `remoteUuid`: kotlin.String
+    , 
     /**
      * Current state of the transfer
      */
-    var state: TransferState,
+    var `state`: TransferState
+    , 
     /**
      * Timestamp of the time when the transfer was created(sent/received) in
      * milliseconds
      */
-    var timestamp: ULong,
+    var `timestamp`: kotlin.ULong
+    , 
     /**
      * Total size of the transfer in bytes
      */
-    var totalBytes: ULong,
+    var `totalBytes`: kotlin.ULong
+    , 
     /**
      * Number of bytes transferred so far
      */
-    var bytesTransferred: ULong,
+    var `bytesTransferred`: kotlin.ULong
+    , 
     /**
      * Current transfer speed in bytes per second. Moving average
      */
-    var bytesPerSecond: ULong,
+    var `bytesPerSecond`: kotlin.ULong
+    , 
     /**
      * Number of total files in the transfer
      */
-    var fileCount: ULong,
+    var `fileCount`: kotlin.ULong
+    , 
     /**
      * Names of the top dir entries in the transfer
      */
-    var entryNames: List<String>,
+    var `entryNames`: List<kotlin.String>
+    , 
     /**
      * Utilized only if the transfer contains a single file. Name of the file
      * being transferred
      */
-    var singleName: String?,
+    var `singleName`: kotlin.String?
+    , 
     /**
      * Utilized only if the transfer contains a single file. MIME type of the
      * file being transferred
      */
-    var singleMimeType: String?,
+    var `singleMimeType`: kotlin.String?
+    , 
     /**
      * Kind of transfer - incoming or outgoing. Contains additional data
      * relevant to the kind
      */
-    var kind: TransferKind,
+    var `kind`: TransferKind
+    
+){
+    
 
-    ) {
+    
 
+    
     companion object
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeTransfer : FfiConverterRustBuffer<Transfer> {
+public object FfiConverterTypeTransfer: FfiConverterRustBuffer<Transfer> {
     override fun read(buf: ByteBuffer): Transfer {
         return Transfer(
             FfiConverterString.read(buf),
@@ -3221,55 +2737,71 @@ object FfiConverterTypeTransfer : FfiConverterRustBuffer<Transfer> {
         )
     }
 
-    override fun allocationSize(value: Transfer) =
-        (FfiConverterString.allocationSize(value.uuid) + FfiConverterString.allocationSize(value.remoteUuid) + FfiConverterTypeTransferState.allocationSize(
-            value.state,
-        ) + FfiConverterULong.allocationSize(value.timestamp) + FfiConverterULong.allocationSize(
-            value.totalBytes,
-        ) + FfiConverterULong.allocationSize(value.bytesTransferred) + FfiConverterULong.allocationSize(
-            value.bytesPerSecond,
-        ) + FfiConverterULong.allocationSize(value.fileCount) + FfiConverterSequenceString.allocationSize(
-            value.entryNames,
-        ) + FfiConverterOptionalString.allocationSize(value.singleName) + FfiConverterOptionalString.allocationSize(
-            value.singleMimeType,
-        ) + FfiConverterTypeTransferKind.allocationSize(value.kind))
+    override fun allocationSize(value: Transfer) = (
+            FfiConverterString.allocationSize(value.`uuid`) +
+            FfiConverterString.allocationSize(value.`remoteUuid`) +
+            FfiConverterTypeTransferState.allocationSize(value.`state`) +
+            FfiConverterULong.allocationSize(value.`timestamp`) +
+            FfiConverterULong.allocationSize(value.`totalBytes`) +
+            FfiConverterULong.allocationSize(value.`bytesTransferred`) +
+            FfiConverterULong.allocationSize(value.`bytesPerSecond`) +
+            FfiConverterULong.allocationSize(value.`fileCount`) +
+            FfiConverterSequenceString.allocationSize(value.`entryNames`) +
+            FfiConverterOptionalString.allocationSize(value.`singleName`) +
+            FfiConverterOptionalString.allocationSize(value.`singleMimeType`) +
+            FfiConverterTypeTransferKind.allocationSize(value.`kind`)
+    )
 
     override fun write(value: Transfer, buf: ByteBuffer) {
-        FfiConverterString.write(value.uuid, buf)
-        FfiConverterString.write(value.remoteUuid, buf)
-        FfiConverterTypeTransferState.write(value.state, buf)
-        FfiConverterULong.write(value.timestamp, buf)
-        FfiConverterULong.write(value.totalBytes, buf)
-        FfiConverterULong.write(value.bytesTransferred, buf)
-        FfiConverterULong.write(value.bytesPerSecond, buf)
-        FfiConverterULong.write(value.fileCount, buf)
-        FfiConverterSequenceString.write(value.entryNames, buf)
-        FfiConverterOptionalString.write(value.singleName, buf)
-        FfiConverterOptionalString.write(value.singleMimeType, buf)
-        FfiConverterTypeTransferKind.write(value.kind, buf)
+            FfiConverterString.write(value.`uuid`, buf)
+            FfiConverterString.write(value.`remoteUuid`, buf)
+            FfiConverterTypeTransferState.write(value.`state`, buf)
+            FfiConverterULong.write(value.`timestamp`, buf)
+            FfiConverterULong.write(value.`totalBytes`, buf)
+            FfiConverterULong.write(value.`bytesTransferred`, buf)
+            FfiConverterULong.write(value.`bytesPerSecond`, buf)
+            FfiConverterULong.write(value.`fileCount`, buf)
+            FfiConverterSequenceString.write(value.`entryNames`, buf)
+            FfiConverterOptionalString.write(value.`singleName`, buf)
+            FfiConverterOptionalString.write(value.`singleMimeType`, buf)
+            FfiConverterTypeTransferKind.write(value.`kind`, buf)
     }
 }
 
-data class UserConfig(
-    var port: UShort?,
-    var regPort: UShort?,
-    var bindAddrV4: String?,
-    var bindAddrV6: String?,
-    var groupCode: String?,
-    var hostname: String?,
-    var username: String?,
-    var displayName: String?,
-    var picture: ByteArray?,
 
-    ) {
 
+data class UserConfig (
+    var `port`: kotlin.UShort?
+    , 
+    var `regPort`: kotlin.UShort?
+    , 
+    var `bindAddrV4`: kotlin.String?
+    , 
+    var `bindAddrV6`: kotlin.String?
+    , 
+    var `groupCode`: kotlin.String?
+    , 
+    var `hostname`: kotlin.String?
+    , 
+    var `username`: kotlin.String?
+    , 
+    var `displayName`: kotlin.String?
+    , 
+    var `picture`: kotlin.ByteArray?
+    
+){
+    
+
+    
+
+    
     companion object
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeUserConfig : FfiConverterRustBuffer<UserConfig> {
+public object FfiConverterTypeUserConfig: FfiConverterRustBuffer<UserConfig> {
     override fun read(buf: ByteBuffer): UserConfig {
         return UserConfig(
             FfiConverterOptionalUShort.read(buf),
@@ -3284,44 +2816,53 @@ object FfiConverterTypeUserConfig : FfiConverterRustBuffer<UserConfig> {
         )
     }
 
-    override fun allocationSize(value: UserConfig) =
-        (FfiConverterOptionalUShort.allocationSize(value.port) + FfiConverterOptionalUShort.allocationSize(
-            value.regPort,
-        ) + FfiConverterOptionalString.allocationSize(value.bindAddrV4) + FfiConverterOptionalString.allocationSize(
-            value.bindAddrV6,
-        ) + FfiConverterOptionalString.allocationSize(value.groupCode) + FfiConverterOptionalString.allocationSize(
-            value.hostname,
-        ) + FfiConverterOptionalString.allocationSize(value.username) + FfiConverterOptionalString.allocationSize(
-            value.displayName,
-        ) + FfiConverterOptionalByteArray.allocationSize(value.picture))
+    override fun allocationSize(value: UserConfig) = (
+            FfiConverterOptionalUShort.allocationSize(value.`port`) +
+            FfiConverterOptionalUShort.allocationSize(value.`regPort`) +
+            FfiConverterOptionalString.allocationSize(value.`bindAddrV4`) +
+            FfiConverterOptionalString.allocationSize(value.`bindAddrV6`) +
+            FfiConverterOptionalString.allocationSize(value.`groupCode`) +
+            FfiConverterOptionalString.allocationSize(value.`hostname`) +
+            FfiConverterOptionalString.allocationSize(value.`username`) +
+            FfiConverterOptionalString.allocationSize(value.`displayName`) +
+            FfiConverterOptionalByteArray.allocationSize(value.`picture`)
+    )
 
     override fun write(value: UserConfig, buf: ByteBuffer) {
-        FfiConverterOptionalUShort.write(value.port, buf)
-        FfiConverterOptionalUShort.write(value.regPort, buf)
-        FfiConverterOptionalString.write(value.bindAddrV4, buf)
-        FfiConverterOptionalString.write(value.bindAddrV6, buf)
-        FfiConverterOptionalString.write(value.groupCode, buf)
-        FfiConverterOptionalString.write(value.hostname, buf)
-        FfiConverterOptionalString.write(value.username, buf)
-        FfiConverterOptionalString.write(value.displayName, buf)
-        FfiConverterOptionalByteArray.write(value.picture, buf)
+            FfiConverterOptionalUShort.write(value.`port`, buf)
+            FfiConverterOptionalUShort.write(value.`regPort`, buf)
+            FfiConverterOptionalString.write(value.`bindAddrV4`, buf)
+            FfiConverterOptionalString.write(value.`bindAddrV6`, buf)
+            FfiConverterOptionalString.write(value.`groupCode`, buf)
+            FfiConverterOptionalString.write(value.`hostname`, buf)
+            FfiConverterOptionalString.write(value.`username`, buf)
+            FfiConverterOptionalString.write(value.`displayName`, buf)
+            FfiConverterOptionalByteArray.write(value.`picture`, buf)
     }
 }
 
-data class VirtualEntry(
-    var isDir: Boolean,
-    var path: String,
-    var name: String,
 
-    ) {
 
+data class VirtualEntry (
+    var `isDir`: kotlin.Boolean
+    , 
+    var `path`: kotlin.String
+    , 
+    var `name`: kotlin.String
+    
+){
+    
+
+    
+
+    
     companion object
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeVirtualEntry : FfiConverterRustBuffer<VirtualEntry> {
+public object FfiConverterTypeVirtualEntry: FfiConverterRustBuffer<VirtualEntry> {
     override fun read(buf: ByteBuffer): VirtualEntry {
         return VirtualEntry(
             FfiConverterBoolean.read(buf),
@@ -3330,33 +2871,43 @@ object FfiConverterTypeVirtualEntry : FfiConverterRustBuffer<VirtualEntry> {
         )
     }
 
-    override fun allocationSize(value: VirtualEntry) =
-        (FfiConverterBoolean.allocationSize(value.isDir) + FfiConverterString.allocationSize(value.path) + FfiConverterString.allocationSize(
-            value.name,
-        ))
+    override fun allocationSize(value: VirtualEntry) = (
+            FfiConverterBoolean.allocationSize(value.`isDir`) +
+            FfiConverterString.allocationSize(value.`path`) +
+            FfiConverterString.allocationSize(value.`name`)
+    )
 
     override fun write(value: VirtualEntry, buf: ByteBuffer) {
-        FfiConverterBoolean.write(value.isDir, buf)
-        FfiConverterString.write(value.path, buf)
-        FfiConverterString.write(value.name, buf)
+            FfiConverterBoolean.write(value.`isDir`, buf)
+            FfiConverterString.write(value.`path`, buf)
+            FfiConverterString.write(value.`name`, buf)
     }
 }
 
-data class VirtualMetadata(
-    var isDir: Boolean,
-    var name: String,
-    var size: ULong,
-    var fileCount: ULong,
 
-    ) {
 
+data class VirtualMetadata (
+    var `isDir`: kotlin.Boolean
+    , 
+    var `name`: kotlin.String
+    , 
+    var `size`: kotlin.ULong
+    , 
+    var `fileCount`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
     companion object
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeVirtualMetadata : FfiConverterRustBuffer<VirtualMetadata> {
+public object FfiConverterTypeVirtualMetadata: FfiConverterRustBuffer<VirtualMetadata> {
     override fun read(buf: ByteBuffer): VirtualMetadata {
         return VirtualMetadata(
             FfiConverterBoolean.read(buf),
@@ -3366,30 +2917,40 @@ object FfiConverterTypeVirtualMetadata : FfiConverterRustBuffer<VirtualMetadata>
         )
     }
 
-    override fun allocationSize(value: VirtualMetadata) =
-        (FfiConverterBoolean.allocationSize(value.isDir) + FfiConverterString.allocationSize(value.name) + FfiConverterULong.allocationSize(
-            value.size,
-        ) + FfiConverterULong.allocationSize(value.fileCount))
+    override fun allocationSize(value: VirtualMetadata) = (
+            FfiConverterBoolean.allocationSize(value.`isDir`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterULong.allocationSize(value.`size`) +
+            FfiConverterULong.allocationSize(value.`fileCount`)
+    )
 
     override fun write(value: VirtualMetadata, buf: ByteBuffer) {
-        FfiConverterBoolean.write(value.isDir, buf)
-        FfiConverterString.write(value.name, buf)
-        FfiConverterULong.write(value.size, buf)
-        FfiConverterULong.write(value.fileCount, buf)
+            FfiConverterBoolean.write(value.`isDir`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterULong.write(value.`size`, buf)
+            FfiConverterULong.write(value.`fileCount`, buf)
     }
 }
 
-enum class Direction {
 
-    SENT, RECEIVED;
+
+
+enum class Direction {
+    
+    SENT,
+    RECEIVED;
+
+    
+
 
     companion object
 }
 
+
 /**
  * @suppress
  */
-object FfiConverterTypeDirection : FfiConverterRustBuffer<Direction> {
+public object FfiConverterTypeDirection: FfiConverterRustBuffer<Direction> {
     override fun read(buf: ByteBuffer) = try {
         Direction.values()[buf.getInt() - 1]
     } catch (e: IndexOutOfBoundsException) {
@@ -3403,17 +2964,30 @@ object FfiConverterTypeDirection : FfiConverterRustBuffer<Direction> {
     }
 }
 
-enum class LogLevel {
 
-    TRACE, DEBUG, INFO, WARN, ERROR;
+
+
+
+
+enum class LogLevel {
+    
+    TRACE,
+    DEBUG,
+    INFO,
+    WARN,
+    ERROR;
+
+    
+
 
     companion object
 }
 
+
 /**
  * @suppress
  */
-object FfiConverterTypeLogLevel : FfiConverterRustBuffer<LogLevel> {
+public object FfiConverterTypeLogLevel: FfiConverterRustBuffer<LogLevel> {
     override fun read(buf: ByteBuffer) = try {
         LogLevel.values()[buf.getInt() - 1]
     } catch (e: IndexOutOfBoundsException) {
@@ -3427,73 +3001,91 @@ object FfiConverterTypeLogLevel : FfiConverterRustBuffer<LogLevel> {
     }
 }
 
-sealed class ManualConnectionException : Exception() {
 
-    class InvalidUrl : ManualConnectionException() {
+
+
+
+
+
+sealed class ManualConnectionException: kotlin.Exception() {
+    
+    class InvalidUrl(
+        ) : ManualConnectionException() {
         override val message
             get() = ""
     }
-
-    class FailedToRegister : ManualConnectionException() {
+    
+    class FailedToRegister(
+        ) : ManualConnectionException() {
         override val message
             get() = ""
     }
-
-    class Unavailable : ManualConnectionException() {
+    
+    class Unavailable(
+        ) : ManualConnectionException() {
         override val message
             get() = ""
     }
-
-    class RemoteInternal : ManualConnectionException() {
+    
+    class RemoteInternal(
+        ) : ManualConnectionException() {
         override val message
             get() = ""
     }
-
-    class RemoteUnimplemented : ManualConnectionException() {
+    
+    class RemoteUnimplemented(
+        ) : ManualConnectionException() {
         override val message
             get() = ""
     }
-
-    class AlreadyConnecting : ManualConnectionException() {
+    
+    class AlreadyConnecting(
+        ) : ManualConnectionException() {
         override val message
             get() = ""
     }
-
-    class AlreadyConnected : ManualConnectionException() {
+    
+    class AlreadyConnected(
+        ) : ManualConnectionException() {
         override val message
             get() = ""
     }
-
+    
     class FailedToConnect(
-
-        val v1: String,
-    ) : ManualConnectionException() {
+        
+        val v1: kotlin.String
+        ) : ManualConnectionException() {
         override val message
-            get() = "v1=${v1}"
+            get() = "v1=${ v1 }"
     }
-
+    
     class RuntimeException(
-
-        val v1: WarpException,
-    ) : ManualConnectionException() {
+        
+        val v1: WarpException
+        ) : ManualConnectionException() {
         override val message
-            get() = "v1=${v1}"
+            get() = "v1=${ v1 }"
     }
+    
+
+    
+
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<ManualConnectionException> {
-        override fun lift(error_buf: RustBuffer.ByValue): ManualConnectionException =
-            FfiConverterTypeManualConnectionError.lift(error_buf)
+        override fun lift(error_buf: RustBuffer.ByValue): ManualConnectionException = FfiConverterTypeManualConnectionError.lift(error_buf)
     }
 
+    
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeManualConnectionError : FfiConverterRustBuffer<ManualConnectionException> {
+public object FfiConverterTypeManualConnectionError : FfiConverterRustBuffer<ManualConnectionException> {
     override fun read(buf: ByteBuffer): ManualConnectionException {
+        
 
-        return when (buf.getInt()) {
+        return when(buf.getInt()) {
             1 -> ManualConnectionException.InvalidUrl()
             2 -> ManualConnectionException.FailedToRegister()
             3 -> ManualConnectionException.Unavailable()
@@ -3503,118 +3095,123 @@ object FfiConverterTypeManualConnectionError : FfiConverterRustBuffer<ManualConn
             7 -> ManualConnectionException.AlreadyConnected()
             8 -> ManualConnectionException.FailedToConnect(
                 FfiConverterString.read(buf),
-            )
-
+                )
             9 -> ManualConnectionException.RuntimeException(
                 FfiConverterTypeWarpError.read(buf),
-            )
-
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
 
     override fun allocationSize(value: ManualConnectionException): ULong {
-        return when (value) {
+        return when(value) {
             is ManualConnectionException.InvalidUrl -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is ManualConnectionException.FailedToRegister -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is ManualConnectionException.Unavailable -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is ManualConnectionException.RemoteInternal -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is ManualConnectionException.RemoteUnimplemented -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is ManualConnectionException.AlreadyConnecting -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is ManualConnectionException.AlreadyConnected -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is ManualConnectionException.FailedToConnect -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL + FfiConverterString.allocationSize(value.v1))
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
             is ManualConnectionException.RuntimeException -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL + FfiConverterTypeWarpError.allocationSize(value.v1))
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterTypeWarpError.allocationSize(value.v1)
+            )
         }
     }
 
     override fun write(value: ManualConnectionException, buf: ByteBuffer) {
-        when (value) {
+        when(value) {
             is ManualConnectionException.InvalidUrl -> {
                 buf.putInt(1)
                 Unit
             }
-
             is ManualConnectionException.FailedToRegister -> {
                 buf.putInt(2)
                 Unit
             }
-
             is ManualConnectionException.Unavailable -> {
                 buf.putInt(3)
                 Unit
             }
-
             is ManualConnectionException.RemoteInternal -> {
                 buf.putInt(4)
                 Unit
             }
-
             is ManualConnectionException.RemoteUnimplemented -> {
                 buf.putInt(5)
                 Unit
             }
-
             is ManualConnectionException.AlreadyConnecting -> {
                 buf.putInt(6)
                 Unit
             }
-
             is ManualConnectionException.AlreadyConnected -> {
                 buf.putInt(7)
                 Unit
             }
-
             is ManualConnectionException.FailedToConnect -> {
                 buf.putInt(8)
                 FfiConverterString.write(value.v1, buf)
+                Unit
             }
-
             is ManualConnectionException.RuntimeException -> {
                 buf.putInt(9)
                 FfiConverterTypeWarpError.write(value.v1, buf)
+                Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
 }
 
-enum class RemoteConnectionError {
 
-    SSL_ERROR, GROUP_CODE_MISMATCH, NO_CERTIFICATE, DUPLEX_ERROR;
+
+
+enum class RemoteConnectionError {
+    
+    SSL_ERROR,
+    GROUP_CODE_MISMATCH,
+    NO_CERTIFICATE,
+    DUPLEX_ERROR;
+
+    
+
 
     companion object
 }
 
+
 /**
  * @suppress
  */
-object FfiConverterTypeRemoteConnectionError : FfiConverterRustBuffer<RemoteConnectionError> {
+public object FfiConverterTypeRemoteConnectionError: FfiConverterRustBuffer<RemoteConnectionError> {
     override fun read(buf: ByteBuffer) = try {
         RemoteConnectionError.values()[buf.getInt() - 1]
     } catch (e: IndexOutOfBoundsException) {
@@ -3628,22 +3225,39 @@ object FfiConverterTypeRemoteConnectionError : FfiConverterRustBuffer<RemoteConn
     }
 }
 
-sealed class RemoteState {
 
+
+
+
+sealed class RemoteState {
+    
     data class Error(
-        val v1: RemoteConnectionError,
-    ) : RemoteState() {
+        val v1: org.perceivers25.warpinator.RemoteConnectionError) : RemoteState()
+        
+    {
+        
 
         companion object
     }
-
+    
     object Disconnected : RemoteState()
-
+    
+    
     object Connecting : RemoteState()
-
+    
+    
     object AwaitingDuplex : RemoteState()
-
+    
+    
     object Connected : RemoteState()
+    
+    
+
+    
+
+    
+    
+
 
     companion object
 }
@@ -3651,13 +3265,12 @@ sealed class RemoteState {
 /**
  * @suppress
  */
-object FfiConverterTypeRemoteState : FfiConverterRustBuffer<RemoteState> {
+public object FfiConverterTypeRemoteState : FfiConverterRustBuffer<RemoteState>{
     override fun read(buf: ByteBuffer): RemoteState {
-        return when (buf.getInt()) {
+        return when(buf.getInt()) {
             1 -> RemoteState.Error(
                 FfiConverterTypeRemoteConnectionError.read(buf),
-            )
-
+                )
             2 -> RemoteState.Disconnected
             3 -> RemoteState.Connecting
             4 -> RemoteState.AwaitingDuplex
@@ -3666,55 +3279,59 @@ object FfiConverterTypeRemoteState : FfiConverterRustBuffer<RemoteState> {
         }
     }
 
-    override fun allocationSize(value: RemoteState) = when (value) {
+    override fun allocationSize(value: RemoteState): ULong = when(value) {
         is RemoteState.Error -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL + FfiConverterTypeRemoteConnectionError.allocationSize(value.v1))
+            (
+                4UL
+                + FfiConverterTypeRemoteConnectionError.allocationSize(value.v1)
+            )
         }
-
         is RemoteState.Disconnected -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is RemoteState.Connecting -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is RemoteState.AwaitingDuplex -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is RemoteState.Connected -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
     }
 
     override fun write(value: RemoteState, buf: ByteBuffer) {
-        when (value) {
+        when(value) {
             is RemoteState.Error -> {
                 buf.putInt(1)
                 FfiConverterTypeRemoteConnectionError.write(value.v1, buf)
+                Unit
             }
-
             is RemoteState.Disconnected -> {
                 buf.putInt(2)
                 Unit
             }
-
             is RemoteState.Connecting -> {
                 buf.putInt(3)
                 Unit
             }
-
             is RemoteState.AwaitingDuplex -> {
                 buf.putInt(4)
                 Unit
             }
-
             is RemoteState.Connected -> {
                 buf.putInt(5)
                 Unit
@@ -3723,17 +3340,38 @@ object FfiConverterTypeRemoteState : FfiConverterRustBuffer<RemoteState> {
     }
 }
 
-enum class TransferError {
 
-    CONNECTION_LOST, STORAGE_FULL, FAILED_TO_PROCESS_FILES, FAILED_TO_START_TRANSFER, UNSAFE_PATH, FILES_NOT_FOUND, PERMISSION_DENIED, FILE_TOO_LARGE, INVALID_FILENAME, OUT_OF_MEMORY, IO_ERROR, REMOTE_ERROR, VIRTUAL_FILESYSTEM_ERROR;
+
+
+
+
+enum class TransferError {
+    
+    CONNECTION_LOST,
+    STORAGE_FULL,
+    FAILED_TO_PROCESS_FILES,
+    FAILED_TO_START_TRANSFER,
+    UNSAFE_PATH,
+    FILES_NOT_FOUND,
+    PERMISSION_DENIED,
+    FILE_TOO_LARGE,
+    INVALID_FILENAME,
+    OUT_OF_MEMORY,
+    IO_ERROR,
+    REMOTE_ERROR,
+    VIRTUAL_FILESYSTEM_ERROR;
+
+    
+
 
     companion object
 }
 
+
 /**
  * @suppress
  */
-object FfiConverterTypeTransferError : FfiConverterRustBuffer<TransferError> {
+public object FfiConverterTypeTransferError: FfiConverterRustBuffer<TransferError> {
     override fun read(buf: ByteBuffer) = try {
         TransferError.values()[buf.getInt() - 1]
     } catch (e: IndexOutOfBoundsException) {
@@ -3747,21 +3385,36 @@ object FfiConverterTypeTransferError : FfiConverterRustBuffer<TransferError> {
     }
 }
 
+
+
+
+
 sealed class TransferKind {
-
+    
     data class Outgoing(
-        val sourcePaths: List<String>,
-    ) : TransferKind() {
+        val `sourcePaths`: List<kotlin.String>) : TransferKind()
+        
+    {
+        
 
         companion object
     }
-
+    
     data class Incoming(
-        val destination: String,
-    ) : TransferKind() {
+        val `destination`: kotlin.String) : TransferKind()
+        
+    {
+        
 
         companion object
     }
+    
+
+    
+
+    
+    
+
 
     companion object
 }
@@ -3769,99 +3422,124 @@ sealed class TransferKind {
 /**
  * @suppress
  */
-object FfiConverterTypeTransferKind : FfiConverterRustBuffer<TransferKind> {
+public object FfiConverterTypeTransferKind : FfiConverterRustBuffer<TransferKind>{
     override fun read(buf: ByteBuffer): TransferKind {
-        return when (buf.getInt()) {
+        return when(buf.getInt()) {
             1 -> TransferKind.Outgoing(
                 FfiConverterSequenceString.read(buf),
-            )
-
+                )
             2 -> TransferKind.Incoming(
                 FfiConverterString.read(buf),
-            )
-
+                )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
 
-    override fun allocationSize(value: TransferKind) = when (value) {
+    override fun allocationSize(value: TransferKind): ULong = when(value) {
         is TransferKind.Outgoing -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL + FfiConverterSequenceString.allocationSize(value.sourcePaths))
+            (
+                4UL
+                + FfiConverterSequenceString.allocationSize(value.`sourcePaths`)
+            )
         }
-
         is TransferKind.Incoming -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL + FfiConverterString.allocationSize(value.destination))
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`destination`)
+            )
         }
     }
 
     override fun write(value: TransferKind, buf: ByteBuffer) {
-        when (value) {
+        when(value) {
             is TransferKind.Outgoing -> {
                 buf.putInt(1)
-                FfiConverterSequenceString.write(value.sourcePaths, buf)
+                FfiConverterSequenceString.write(value.`sourcePaths`, buf)
+                Unit
             }
-
             is TransferKind.Incoming -> {
                 buf.putInt(2)
-                FfiConverterString.write(value.destination, buf)
+                FfiConverterString.write(value.`destination`, buf)
+                Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 }
 
-sealed class TransferState {
 
+
+
+
+sealed class TransferState {
+    
     /**
      * New outgoing transfer
      */
     object Initializing : TransferState()
-
+    
+    
     /**
      * Waiting for the other party to accept the transfer
      */
     object WaitingPermission : TransferState()
-
+    
+    
     /**
      * Transfer is in progress
      */
     object InProgress : TransferState()
-
+    
+    
     /**
      * Transfer is paused
      */
     object Paused : TransferState()
-
+    
+    
     /**
      * Transfer is completed
      */
     object Completed : TransferState()
-
+    
+    
     /**
      * Transfer was stopped
      */
     object Stopped : TransferState()
-
+    
+    
     /**
      * Transfer was canceled by the sender
      */
     object Canceled : TransferState()
-
+    
+    
     /**
      * Transfer was denied by the other party
      */
     object Denied : TransferState()
-
+    
+    
     /**
      * Transfer failed due to an error
      */
     data class Failed(
-        val v1: TransferError,
-    ) : TransferState() {
+        val v1: org.perceivers25.warpinator.TransferError) : TransferState()
+        
+    {
+        
 
         companion object
     }
+    
+
+    
+
+    
+    
+
 
     companion object
 }
@@ -3869,9 +3547,9 @@ sealed class TransferState {
 /**
  * @suppress
  */
-object FfiConverterTypeTransferState : FfiConverterRustBuffer<TransferState> {
+public object FfiConverterTypeTransferState : FfiConverterRustBuffer<TransferState>{
     override fun read(buf: ByteBuffer): TransferState {
-        return when (buf.getInt()) {
+        return when(buf.getInt()) {
             1 -> TransferState.Initializing
             2 -> TransferState.WaitingPermission
             3 -> TransferState.InProgress
@@ -3882,160 +3560,181 @@ object FfiConverterTypeTransferState : FfiConverterRustBuffer<TransferState> {
             8 -> TransferState.Denied
             9 -> TransferState.Failed(
                 FfiConverterTypeTransferError.read(buf),
-            )
-
+                )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
 
-    override fun allocationSize(value: TransferState) = when (value) {
+    override fun allocationSize(value: TransferState): ULong = when(value) {
         is TransferState.Initializing -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.WaitingPermission -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.InProgress -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.Paused -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.Completed -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.Stopped -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.Canceled -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.Denied -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL)
+            (
+                4UL
+            )
         }
-
         is TransferState.Failed -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
-            (4UL + FfiConverterTypeTransferError.allocationSize(value.v1))
+            (
+                4UL
+                + FfiConverterTypeTransferError.allocationSize(value.v1)
+            )
         }
     }
 
     override fun write(value: TransferState, buf: ByteBuffer) {
-        when (value) {
+        when(value) {
             is TransferState.Initializing -> {
                 buf.putInt(1)
                 Unit
             }
-
             is TransferState.WaitingPermission -> {
                 buf.putInt(2)
                 Unit
             }
-
             is TransferState.InProgress -> {
                 buf.putInt(3)
                 Unit
             }
-
             is TransferState.Paused -> {
                 buf.putInt(4)
                 Unit
             }
-
             is TransferState.Completed -> {
                 buf.putInt(5)
                 Unit
             }
-
             is TransferState.Stopped -> {
                 buf.putInt(6)
                 Unit
             }
-
             is TransferState.Canceled -> {
                 buf.putInt(7)
                 Unit
             }
-
             is TransferState.Denied -> {
                 buf.putInt(8)
                 Unit
             }
-
             is TransferState.Failed -> {
                 buf.putInt(9)
                 FfiConverterTypeTransferError.write(value.v1, buf)
+                Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 }
 
-sealed class VirtualFilesystemException : Exception() {
 
-    class AlreadySet : VirtualFilesystemException() {
+
+
+
+
+
+sealed class VirtualFilesystemException: kotlin.Exception() {
+    
+    class AlreadySet(
+        ) : VirtualFilesystemException() {
         override val message
             get() = ""
     }
-
-    class NotSet : VirtualFilesystemException() {
+    
+    class NotSet(
+        ) : VirtualFilesystemException() {
         override val message
             get() = ""
     }
-
-    class FileNotFound : VirtualFilesystemException() {
+    
+    class FileNotFound(
+        ) : VirtualFilesystemException() {
         override val message
             get() = ""
     }
-
-    class FileAlreadyExists : VirtualFilesystemException() {
+    
+    class FileAlreadyExists(
+        ) : VirtualFilesystemException() {
         override val message
             get() = ""
     }
-
-    class PermissionDenied : VirtualFilesystemException() {
+    
+    class PermissionDenied(
+        ) : VirtualFilesystemException() {
         override val message
             get() = ""
     }
-
-    class InvalidPath : VirtualFilesystemException() {
+    
+    class InvalidPath(
+        ) : VirtualFilesystemException() {
         override val message
             get() = ""
     }
-
-    class FileCreateException : VirtualFilesystemException() {
+    
+    class FileCreateException(
+        ) : VirtualFilesystemException() {
         override val message
             get() = ""
     }
+    
+
+    
+
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<VirtualFilesystemException> {
-        override fun lift(error_buf: RustBuffer.ByValue): VirtualFilesystemException =
-            FfiConverterTypeVirtualFilesystemError.lift(error_buf)
+        override fun lift(error_buf: RustBuffer.ByValue): VirtualFilesystemException = FfiConverterTypeVirtualFilesystemError.lift(error_buf)
     }
 
+    
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeVirtualFilesystemError : FfiConverterRustBuffer<VirtualFilesystemException> {
+public object FfiConverterTypeVirtualFilesystemError : FfiConverterRustBuffer<VirtualFilesystemException> {
     override fun read(buf: ByteBuffer): VirtualFilesystemException {
+        
 
-        return when (buf.getInt()) {
+        return when(buf.getInt()) {
             1 -> VirtualFilesystemException.AlreadySet()
             2 -> VirtualFilesystemException.NotSet()
             3 -> VirtualFilesystemException.FileNotFound()
@@ -4048,69 +3747,64 @@ object FfiConverterTypeVirtualFilesystemError : FfiConverterRustBuffer<VirtualFi
     }
 
     override fun allocationSize(value: VirtualFilesystemException): ULong {
-        return when (value) {
+        return when(value) {
             is VirtualFilesystemException.AlreadySet -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is VirtualFilesystemException.NotSet -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is VirtualFilesystemException.FileNotFound -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is VirtualFilesystemException.FileAlreadyExists -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is VirtualFilesystemException.PermissionDenied -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is VirtualFilesystemException.InvalidPath -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is VirtualFilesystemException.FileCreateException -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
         }
     }
 
     override fun write(value: VirtualFilesystemException, buf: ByteBuffer) {
-        when (value) {
+        when(value) {
             is VirtualFilesystemException.AlreadySet -> {
                 buf.putInt(1)
                 Unit
             }
-
             is VirtualFilesystemException.NotSet -> {
                 buf.putInt(2)
                 Unit
             }
-
             is VirtualFilesystemException.FileNotFound -> {
                 buf.putInt(3)
                 Unit
             }
-
             is VirtualFilesystemException.FileAlreadyExists -> {
                 buf.putInt(4)
                 Unit
             }
-
             is VirtualFilesystemException.PermissionDenied -> {
                 buf.putInt(5)
                 Unit
             }
-
             is VirtualFilesystemException.InvalidPath -> {
                 buf.putInt(6)
                 Unit
             }
-
             is VirtualFilesystemException.FileCreateException -> {
                 buf.putInt(7)
                 Unit
@@ -4120,56 +3814,68 @@ object FfiConverterTypeVirtualFilesystemError : FfiConverterRustBuffer<VirtualFi
 
 }
 
-sealed class WarpException : Exception() {
 
-    class RuntimeException : WarpException() {
+
+
+
+sealed class WarpException: kotlin.Exception() {
+    
+    class RuntimeException(
+        ) : WarpException() {
         override val message
             get() = ""
     }
-
-    class InvalidIp : WarpException() {
+    
+    class InvalidIp(
+        ) : WarpException() {
         override val message
             get() = ""
     }
-
+    
     class BuildServerException(
-
-        val v1: String,
-    ) : WarpException() {
+        
+        val v1: kotlin.String
+        ) : WarpException() {
         override val message
-            get() = "v1=${v1}"
+            get() = "v1=${ v1 }"
     }
-
-    class AlreadyStarted : WarpException() {
-        override val message
-            get() = ""
-    }
-
-    class NotFound : WarpException() {
+    
+    class AlreadyStarted(
+        ) : WarpException() {
         override val message
             get() = ""
     }
+    
+    class NotFound(
+        ) : WarpException() {
+        override val message
+            get() = ""
+    }
+    
+
+    
+
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<WarpException> {
-        override fun lift(error_buf: RustBuffer.ByValue): WarpException =
-            FfiConverterTypeWarpError.lift(error_buf)
+        override fun lift(error_buf: RustBuffer.ByValue): WarpException = FfiConverterTypeWarpError.lift(error_buf)
     }
 
+    
 }
 
 /**
  * @suppress
  */
-object FfiConverterTypeWarpError : FfiConverterRustBuffer<WarpException> {
+public object FfiConverterTypeWarpError : FfiConverterRustBuffer<WarpException> {
     override fun read(buf: ByteBuffer): WarpException {
+        
 
-        return when (buf.getInt()) {
+        return when(buf.getInt()) {
             1 -> WarpException.RuntimeException()
             2 -> WarpException.InvalidIp()
             3 -> WarpException.BuildServerException(
                 FfiConverterString.read(buf),
-            )
-
+                )
             4 -> WarpException.AlreadyStarted()
             5 -> WarpException.NotFound()
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -4177,51 +3883,50 @@ object FfiConverterTypeWarpError : FfiConverterRustBuffer<WarpException> {
     }
 
     override fun allocationSize(value: WarpException): ULong {
-        return when (value) {
+        return when(value) {
             is WarpException.RuntimeException -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is WarpException.InvalidIp -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is WarpException.BuildServerException -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL + FfiConverterString.allocationSize(value.v1))
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.v1)
+            )
             is WarpException.AlreadyStarted -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
-
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
             is WarpException.NotFound -> (
-                    // Add the size for the Int that specifies the variant plus the size needed for all fields
-                    4UL)
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+            )
         }
     }
 
     override fun write(value: WarpException, buf: ByteBuffer) {
-        when (value) {
+        when(value) {
             is WarpException.RuntimeException -> {
                 buf.putInt(1)
                 Unit
             }
-
             is WarpException.InvalidIp -> {
                 buf.putInt(2)
                 Unit
             }
-
             is WarpException.BuildServerException -> {
                 buf.putInt(3)
                 FfiConverterString.write(value.v1, buf)
+                Unit
             }
-
             is WarpException.AlreadyStarted -> {
                 buf.putInt(4)
                 Unit
             }
-
             is WarpException.NotFound -> {
                 buf.putInt(5)
                 Unit
@@ -4231,54 +3936,53 @@ object FfiConverterTypeWarpError : FfiConverterRustBuffer<WarpException> {
 
 }
 
-interface PowerManager {
 
-    fun acquireWakeLock()
 
-    fun releaseWakeLock()
 
+
+public interface PowerManager {
+    
+    fun `acquireWakeLock`()
+    
+    fun `releaseWakeLock`()
+    
     companion object
 }
 
+
+
 // Put the implementation in an object so we don't pollute the top-level namespace
 internal object uniffiCallbackInterfacePowerManager {
-    internal object acquireWakeLock : UniffiCallbackInterfacePowerManagerMethod0 {
-        override fun callback(
-            uniffiHandle: Long,
-            uniffiOutReturn: Pointer, uniffiCallStatus: UniffiRustCallStatus,
-        ) {
+    internal object `acquireWakeLock`: UniffiCallbackInterfacePowerManagerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypePowerManager.handleMap.get(uniffiHandle)
-            val makeCall = {
-                uniffiObj.acquireWakeLock(
+            val makeCall = { ->
+                uniffiObj.`acquireWakeLock`(
                 )
             }
-            val writeReturn = { _: Unit -> }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `releaseWakeLock`: UniffiCallbackInterfacePowerManagerMethod1 {
+        override fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypePowerManager.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`releaseWakeLock`(
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
             uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
         }
     }
 
-    internal object releaseWakeLock : UniffiCallbackInterfacePowerManagerMethod1 {
-        override fun callback(
-            uniffiHandle: Long,
-            uniffiOutReturn: Pointer, uniffiCallStatus: UniffiRustCallStatus,
-        ) {
-            val uniffiObj = FfiConverterTypePowerManager.handleMap.get(uniffiHandle)
-            val makeCall = {
-                uniffiObj.releaseWakeLock(
-                )
-            }
-            val writeReturn = { _: Unit -> }
-            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
-        }
-    }
-
-    internal object uniffiFree : UniffiCallbackInterfaceFree {
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
             FfiConverterTypePowerManager.handleMap.remove(handle)
         }
     }
 
-    internal object uniffiClone : UniffiCallbackInterfaceClone {
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
         override fun callback(handle: Long): Long {
             return FfiConverterTypePowerManager.handleMap.clone(handle)
         }
@@ -4287,8 +3991,8 @@ internal object uniffiCallbackInterfacePowerManager {
     internal var vtable = UniffiVTableCallbackInterfacePowerManager.UniffiByValue(
         uniffiFree,
         uniffiClone,
-        acquireWakeLock,
-        releaseWakeLock,
+        `acquireWakeLock`,
+        `releaseWakeLock`,
     )
 
     // Registers the foreign callback with the Rust side.
@@ -4303,45 +4007,45 @@ internal object uniffiCallbackInterfacePowerManager {
  *
  * @suppress
  */
-object FfiConverterTypePowerManager : FfiConverterCallbackInterface<PowerManager>()
+public object FfiConverterTypePowerManager: FfiConverterCallbackInterface<PowerManager>()
 
-interface VirtualFilesystem {
 
-    suspend fun metadata(path: String): VirtualMetadata
 
-    suspend fun readDir(path: String): List<VirtualMetadata>
 
-    suspend fun listDir(path: String): List<VirtualEntry>
 
-    suspend fun createDir(path: String, folder: String): String
-
-    suspend fun openFile(path: String): Int
-
-    suspend fun createFile(path: String, `file`: String): Int
-
+public interface VirtualFilesystem {
+    
+    suspend fun `metadata`(`path`: kotlin.String): VirtualMetadata
+    
+    suspend fun `readDir`(`path`: kotlin.String): List<VirtualMetadata>
+    
+    suspend fun `listDir`(`path`: kotlin.String): List<VirtualEntry>
+    
+    suspend fun `createDir`(`path`: kotlin.String, `folder`: kotlin.String): kotlin.String
+    
+    suspend fun `openFile`(`path`: kotlin.String): kotlin.Int
+    
+    suspend fun `createFile`(`path`: kotlin.String, `file`: kotlin.String): kotlin.Int
+    
     companion object
 }
 
+
+
 // Put the implementation in an object so we don't pollute the top-level namespace
 internal object uniffiCallbackInterfaceVirtualFilesystem {
-    internal object metadata : UniffiCallbackInterfaceVirtualFilesystemMethod0 {
-        override fun callback(
-            uniffiHandle: Long,
-            path: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `metadata`: UniffiCallbackInterfaceVirtualFilesystemMethod0 {
+        override fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeVirtualFilesystem.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.metadata(
-                    FfiConverterString.lift(path),
+            val makeCall = suspend { ->
+                uniffiObj.`metadata`(
+                    FfiConverterString.lift(`path`),
                 )
             }
             val uniffiHandleSuccess = { returnValue: VirtualMetadata ->
                 val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
                     FfiConverterTypeVirtualMetadata.lower(returnValue),
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4360,29 +4064,22 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
                 uniffiHandleSuccess,
                 uniffiHandleError,
                 { e: VirtualFilesystemException -> FfiConverterTypeVirtualFilesystemError.lower(e) },
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object readDir : UniffiCallbackInterfaceVirtualFilesystemMethod1 {
-        override fun callback(
-            uniffiHandle: Long,
-            path: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `readDir`: UniffiCallbackInterfaceVirtualFilesystemMethod1 {
+        override fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeVirtualFilesystem.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.readDir(
-                    FfiConverterString.lift(path),
+            val makeCall = suspend { ->
+                uniffiObj.`readDir`(
+                    FfiConverterString.lift(`path`),
                 )
             }
             val uniffiHandleSuccess = { returnValue: List<VirtualMetadata> ->
                 val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
                     FfiConverterSequenceTypeVirtualMetadata.lower(returnValue),
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4401,29 +4098,22 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
                 uniffiHandleSuccess,
                 uniffiHandleError,
                 { e: VirtualFilesystemException -> FfiConverterTypeVirtualFilesystemError.lower(e) },
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object listDir : UniffiCallbackInterfaceVirtualFilesystemMethod2 {
-        override fun callback(
-            uniffiHandle: Long,
-            path: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `listDir`: UniffiCallbackInterfaceVirtualFilesystemMethod2 {
+        override fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeVirtualFilesystem.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.listDir(
-                    FfiConverterString.lift(path),
+            val makeCall = suspend { ->
+                uniffiObj.`listDir`(
+                    FfiConverterString.lift(`path`),
                 )
             }
             val uniffiHandleSuccess = { returnValue: List<VirtualEntry> ->
                 val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
                     FfiConverterSequenceTypeVirtualEntry.lower(returnValue),
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4442,31 +4132,23 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
                 uniffiHandleSuccess,
                 uniffiHandleError,
                 { e: VirtualFilesystemException -> FfiConverterTypeVirtualFilesystemError.lower(e) },
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object createDir : UniffiCallbackInterfaceVirtualFilesystemMethod3 {
-        override fun callback(
-            uniffiHandle: Long,
-            path: RustBuffer.ByValue,
-            folder: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteRustBuffer,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `createDir`: UniffiCallbackInterfaceVirtualFilesystemMethod3 {
+        override fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`folder`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeVirtualFilesystem.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.createDir(
-                    FfiConverterString.lift(path),
-                    FfiConverterString.lift(folder),
+            val makeCall = suspend { ->
+                uniffiObj.`createDir`(
+                    FfiConverterString.lift(`path`),
+                    FfiConverterString.lift(`folder`),
                 )
             }
-            val uniffiHandleSuccess = { returnValue: String ->
+            val uniffiHandleSuccess = { returnValue: kotlin.String ->
                 val uniffiResult = UniffiForeignFutureResultRustBuffer.UniffiByValue(
                     FfiConverterString.lower(returnValue),
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4485,29 +4167,22 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
                 uniffiHandleSuccess,
                 uniffiHandleError,
                 { e: VirtualFilesystemException -> FfiConverterTypeVirtualFilesystemError.lower(e) },
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object openFile : UniffiCallbackInterfaceVirtualFilesystemMethod4 {
-        override fun callback(
-            uniffiHandle: Long,
-            path: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteI32,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `openFile`: UniffiCallbackInterfaceVirtualFilesystemMethod4 {
+        override fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI32,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeVirtualFilesystem.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.openFile(
-                    FfiConverterString.lift(path),
+            val makeCall = suspend { ->
+                uniffiObj.`openFile`(
+                    FfiConverterString.lift(`path`),
                 )
             }
-            val uniffiHandleSuccess = { returnValue: Int ->
+            val uniffiHandleSuccess = { returnValue: kotlin.Int ->
                 val uniffiResult = UniffiForeignFutureResultI32.UniffiByValue(
                     FfiConverterInt.lower(returnValue),
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4526,31 +4201,23 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
                 uniffiHandleSuccess,
                 uniffiHandleError,
                 { e: VirtualFilesystemException -> FfiConverterTypeVirtualFilesystemError.lower(e) },
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object createFile : UniffiCallbackInterfaceVirtualFilesystemMethod5 {
-        override fun callback(
-            uniffiHandle: Long,
-            path: RustBuffer.ByValue,
-            `file`: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteI32,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `createFile`: UniffiCallbackInterfaceVirtualFilesystemMethod5 {
+        override fun callback(`uniffiHandle`: Long,`path`: RustBuffer.ByValue,`file`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteI32,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeVirtualFilesystem.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.createFile(
-                    FfiConverterString.lift(path),
+            val makeCall = suspend { ->
+                uniffiObj.`createFile`(
+                    FfiConverterString.lift(`path`),
                     FfiConverterString.lift(`file`),
                 )
             }
-            val uniffiHandleSuccess = { returnValue: Int ->
+            val uniffiHandleSuccess = { returnValue: kotlin.Int ->
                 val uniffiResult = UniffiForeignFutureResultI32.UniffiByValue(
                     FfiConverterInt.lower(returnValue),
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4569,18 +4236,18 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
                 uniffiHandleSuccess,
                 uniffiHandleError,
                 { e: VirtualFilesystemException -> FfiConverterTypeVirtualFilesystemError.lower(e) },
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
 
-    internal object uniffiFree : UniffiCallbackInterfaceFree {
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
             FfiConverterTypeVirtualFilesystem.handleMap.remove(handle)
         }
     }
 
-    internal object uniffiClone : UniffiCallbackInterfaceClone {
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
         override fun callback(handle: Long): Long {
             return FfiConverterTypeVirtualFilesystem.handleMap.clone(handle)
         }
@@ -4589,12 +4256,12 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
     internal var vtable = UniffiVTableCallbackInterfaceVirtualFilesystem.UniffiByValue(
         uniffiFree,
         uniffiClone,
-        metadata,
-        readDir,
-        listDir,
-        createDir,
-        openFile,
-        createFile,
+        `metadata`,
+        `readDir`,
+        `listDir`,
+        `createDir`,
+        `openFile`,
+        `createFile`,
     )
 
     // Registers the foreign callback with the Rust side.
@@ -4609,46 +4276,46 @@ internal object uniffiCallbackInterfaceVirtualFilesystem {
  *
  * @suppress
  */
-object FfiConverterTypeVirtualFilesystem : FfiConverterCallbackInterface<VirtualFilesystem>()
+public object FfiConverterTypeVirtualFilesystem: FfiConverterCallbackInterface<VirtualFilesystem>()
 
-interface WarpEventListener {
 
-    suspend fun onRemoteAdded(uuid: String)
 
-    suspend fun onRemoteUpdated(uuid: String)
 
-    suspend fun onTransferAdded(remoteUuid: String, transferUuid: String)
 
-    suspend fun onTransferUpdated(remoteUuid: String, transferUuid: String)
-
-    suspend fun onTransferRemoved(remoteUuid: String, transferUuid: String)
-
-    suspend fun onMessageAdded(remoteUuid: String, messageUuid: String)
-
-    suspend fun onMessageRemoved(remoteUuid: String, messageUuid: String)
-
+public interface WarpEventListener {
+    
+    suspend fun `onRemoteAdded`(`uuid`: kotlin.String)
+    
+    suspend fun `onRemoteUpdated`(`uuid`: kotlin.String)
+    
+    suspend fun `onTransferAdded`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String)
+    
+    suspend fun `onTransferUpdated`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String)
+    
+    suspend fun `onTransferRemoved`(`remoteUuid`: kotlin.String, `transferUuid`: kotlin.String)
+    
+    suspend fun `onMessageAdded`(`remoteUuid`: kotlin.String, `messageUuid`: kotlin.String)
+    
+    suspend fun `onMessageRemoved`(`remoteUuid`: kotlin.String, `messageUuid`: kotlin.String)
+    
     companion object
 }
 
+
+
 // Put the implementation in an object so we don't pollute the top-level namespace
 internal object uniffiCallbackInterfaceWarpEventListener {
-    internal object onRemoteAdded : UniffiCallbackInterfaceWarpEventListenerMethod0 {
-        override fun callback(
-            uniffiHandle: Long,
-            uuid: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `onRemoteAdded`: UniffiCallbackInterfaceWarpEventListenerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`uuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeWarpEventListener.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.onRemoteAdded(
-                    FfiConverterString.lift(uuid),
+            val makeCall = suspend { ->
+                uniffiObj.`onRemoteAdded`(
+                    FfiConverterString.lift(`uuid`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
                 val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4665,28 +4332,21 @@ internal object uniffiCallbackInterfaceWarpEventListener {
                 makeCall,
                 uniffiHandleSuccess,
                 uniffiHandleError,
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object onRemoteUpdated : UniffiCallbackInterfaceWarpEventListenerMethod1 {
-        override fun callback(
-            uniffiHandle: Long,
-            uuid: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `onRemoteUpdated`: UniffiCallbackInterfaceWarpEventListenerMethod1 {
+        override fun callback(`uniffiHandle`: Long,`uuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeWarpEventListener.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.onRemoteUpdated(
-                    FfiConverterString.lift(uuid),
+            val makeCall = suspend { ->
+                uniffiObj.`onRemoteUpdated`(
+                    FfiConverterString.lift(`uuid`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
                 val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4703,30 +4363,22 @@ internal object uniffiCallbackInterfaceWarpEventListener {
                 makeCall,
                 uniffiHandleSuccess,
                 uniffiHandleError,
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object onTransferAdded : UniffiCallbackInterfaceWarpEventListenerMethod2 {
-        override fun callback(
-            uniffiHandle: Long,
-            remoteUuid: RustBuffer.ByValue,
-            transferUuid: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `onTransferAdded`: UniffiCallbackInterfaceWarpEventListenerMethod2 {
+        override fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeWarpEventListener.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.onTransferAdded(
-                    FfiConverterString.lift(remoteUuid),
-                    FfiConverterString.lift(transferUuid),
+            val makeCall = suspend { ->
+                uniffiObj.`onTransferAdded`(
+                    FfiConverterString.lift(`remoteUuid`),
+                    FfiConverterString.lift(`transferUuid`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
                 val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4743,30 +4395,22 @@ internal object uniffiCallbackInterfaceWarpEventListener {
                 makeCall,
                 uniffiHandleSuccess,
                 uniffiHandleError,
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object onTransferUpdated : UniffiCallbackInterfaceWarpEventListenerMethod3 {
-        override fun callback(
-            uniffiHandle: Long,
-            remoteUuid: RustBuffer.ByValue,
-            transferUuid: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `onTransferUpdated`: UniffiCallbackInterfaceWarpEventListenerMethod3 {
+        override fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeWarpEventListener.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.onTransferUpdated(
-                    FfiConverterString.lift(remoteUuid),
-                    FfiConverterString.lift(transferUuid),
+            val makeCall = suspend { ->
+                uniffiObj.`onTransferUpdated`(
+                    FfiConverterString.lift(`remoteUuid`),
+                    FfiConverterString.lift(`transferUuid`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
                 val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4783,30 +4427,22 @@ internal object uniffiCallbackInterfaceWarpEventListener {
                 makeCall,
                 uniffiHandleSuccess,
                 uniffiHandleError,
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object onTransferRemoved : UniffiCallbackInterfaceWarpEventListenerMethod4 {
-        override fun callback(
-            uniffiHandle: Long,
-            remoteUuid: RustBuffer.ByValue,
-            transferUuid: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `onTransferRemoved`: UniffiCallbackInterfaceWarpEventListenerMethod4 {
+        override fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`transferUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeWarpEventListener.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.onTransferRemoved(
-                    FfiConverterString.lift(remoteUuid),
-                    FfiConverterString.lift(transferUuid),
+            val makeCall = suspend { ->
+                uniffiObj.`onTransferRemoved`(
+                    FfiConverterString.lift(`remoteUuid`),
+                    FfiConverterString.lift(`transferUuid`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
                 val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4823,30 +4459,22 @@ internal object uniffiCallbackInterfaceWarpEventListener {
                 makeCall,
                 uniffiHandleSuccess,
                 uniffiHandleError,
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object onMessageAdded : UniffiCallbackInterfaceWarpEventListenerMethod5 {
-        override fun callback(
-            uniffiHandle: Long,
-            remoteUuid: RustBuffer.ByValue,
-            messageUuid: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `onMessageAdded`: UniffiCallbackInterfaceWarpEventListenerMethod5 {
+        override fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`messageUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeWarpEventListener.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.onMessageAdded(
-                    FfiConverterString.lift(remoteUuid),
-                    FfiConverterString.lift(messageUuid),
+            val makeCall = suspend { ->
+                uniffiObj.`onMessageAdded`(
+                    FfiConverterString.lift(`remoteUuid`),
+                    FfiConverterString.lift(`messageUuid`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
                 val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4863,30 +4491,22 @@ internal object uniffiCallbackInterfaceWarpEventListener {
                 makeCall,
                 uniffiHandleSuccess,
                 uniffiHandleError,
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
-
-    internal object onMessageRemoved : UniffiCallbackInterfaceWarpEventListenerMethod6 {
-        override fun callback(
-            uniffiHandle: Long,
-            remoteUuid: RustBuffer.ByValue,
-            messageUuid: RustBuffer.ByValue,
-            uniffiFutureCallback: UniffiForeignFutureCompleteVoid,
-            uniffiCallbackData: Long,
-            uniffiOutDroppedCallback: UniffiForeignFutureDroppedCallbackStruct,
-        ) {
+    internal object `onMessageRemoved`: UniffiCallbackInterfaceWarpEventListenerMethod6 {
+        override fun callback(`uniffiHandle`: Long,`remoteUuid`: RustBuffer.ByValue,`messageUuid`: RustBuffer.ByValue,`uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,`uniffiCallbackData`: Long,`uniffiOutDroppedCallback`: UniffiForeignFutureDroppedCallbackStruct,) {
             val uniffiObj = FfiConverterTypeWarpEventListener.handleMap.get(uniffiHandle)
-            val makeCall = suspend {
-                uniffiObj.onMessageRemoved(
-                    FfiConverterString.lift(remoteUuid),
-                    FfiConverterString.lift(messageUuid),
+            val makeCall = suspend { ->
+                uniffiObj.`onMessageRemoved`(
+                    FfiConverterString.lift(`remoteUuid`),
+                    FfiConverterString.lift(`messageUuid`),
                 )
             }
             val uniffiHandleSuccess = { _: Unit ->
                 val uniffiResult = UniffiForeignFutureResultVoid.UniffiByValue(
-                    UniffiRustCallStatus.ByValue(),
+                    UniffiRustCallStatus.ByValue()
                 )
                 uniffiResult.write()
                 uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
@@ -4903,18 +4523,18 @@ internal object uniffiCallbackInterfaceWarpEventListener {
                 makeCall,
                 uniffiHandleSuccess,
                 uniffiHandleError,
-                uniffiOutDroppedCallback,
+                uniffiOutDroppedCallback
             )
         }
     }
 
-    internal object uniffiFree : UniffiCallbackInterfaceFree {
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
         override fun callback(handle: Long) {
             FfiConverterTypeWarpEventListener.handleMap.remove(handle)
         }
     }
 
-    internal object uniffiClone : UniffiCallbackInterfaceClone {
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
         override fun callback(handle: Long): Long {
             return FfiConverterTypeWarpEventListener.handleMap.clone(handle)
         }
@@ -4923,13 +4543,13 @@ internal object uniffiCallbackInterfaceWarpEventListener {
     internal var vtable = UniffiVTableCallbackInterfaceWarpEventListener.UniffiByValue(
         uniffiFree,
         uniffiClone,
-        onRemoteAdded,
-        onRemoteUpdated,
-        onTransferAdded,
-        onTransferUpdated,
-        onTransferRemoved,
-        onMessageAdded,
-        onMessageRemoved,
+        `onRemoteAdded`,
+        `onRemoteUpdated`,
+        `onTransferAdded`,
+        `onTransferUpdated`,
+        `onTransferRemoved`,
+        `onMessageAdded`,
+        `onMessageRemoved`,
     )
 
     // Registers the foreign callback with the Rust side.
@@ -4944,20 +4564,23 @@ internal object uniffiCallbackInterfaceWarpEventListener {
  *
  * @suppress
  */
-object FfiConverterTypeWarpEventListener : FfiConverterCallbackInterface<WarpEventListener>()
+public object FfiConverterTypeWarpEventListener: FfiConverterCallbackInterface<WarpEventListener>()
+
+
+
 
 /**
  * @suppress
  */
-object FfiConverterOptionalUShort : FfiConverterRustBuffer<UShort?> {
-    override fun read(buf: ByteBuffer): UShort? {
+public object FfiConverterOptionalUShort: FfiConverterRustBuffer<kotlin.UShort?> {
+    override fun read(buf: ByteBuffer): kotlin.UShort? {
         if (buf.get().toInt() == 0) {
             return null
         }
         return FfiConverterUShort.read(buf)
     }
 
-    override fun allocationSize(value: UShort?): ULong {
+    override fun allocationSize(value: kotlin.UShort?): ULong {
         if (value == null) {
             return 1UL
         } else {
@@ -4965,7 +4588,7 @@ object FfiConverterOptionalUShort : FfiConverterRustBuffer<UShort?> {
         }
     }
 
-    override fun write(value: UShort?, buf: ByteBuffer) {
+    override fun write(value: kotlin.UShort?, buf: ByteBuffer) {
         if (value == null) {
             buf.put(0)
         } else {
@@ -4975,18 +4598,21 @@ object FfiConverterOptionalUShort : FfiConverterRustBuffer<UShort?> {
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterOptionalString : FfiConverterRustBuffer<String?> {
-    override fun read(buf: ByteBuffer): String? {
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
         if (buf.get().toInt() == 0) {
             return null
         }
         return FfiConverterString.read(buf)
     }
 
-    override fun allocationSize(value: String?): ULong {
+    override fun allocationSize(value: kotlin.String?): ULong {
         if (value == null) {
             return 1UL
         } else {
@@ -4994,7 +4620,7 @@ object FfiConverterOptionalString : FfiConverterRustBuffer<String?> {
         }
     }
 
-    override fun write(value: String?, buf: ByteBuffer) {
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
         if (value == null) {
             buf.put(0)
         } else {
@@ -5004,18 +4630,21 @@ object FfiConverterOptionalString : FfiConverterRustBuffer<String?> {
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterOptionalByteArray : FfiConverterRustBuffer<ByteArray?> {
-    override fun read(buf: ByteBuffer): ByteArray? {
+public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteArray?> {
+    override fun read(buf: ByteBuffer): kotlin.ByteArray? {
         if (buf.get().toInt() == 0) {
             return null
         }
         return FfiConverterByteArray.read(buf)
     }
 
-    override fun allocationSize(value: ByteArray?): ULong {
+    override fun allocationSize(value: kotlin.ByteArray?): ULong {
         if (value == null) {
             return 1UL
         } else {
@@ -5023,7 +4652,7 @@ object FfiConverterOptionalByteArray : FfiConverterRustBuffer<ByteArray?> {
         }
     }
 
-    override fun write(value: ByteArray?, buf: ByteBuffer) {
+    override fun write(value: kotlin.ByteArray?, buf: ByteBuffer) {
         if (value == null) {
             buf.put(0)
         } else {
@@ -5033,10 +4662,13 @@ object FfiConverterOptionalByteArray : FfiConverterRustBuffer<ByteArray?> {
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterOptionalDuration : FfiConverterRustBuffer<java.time.Duration?> {
+public object FfiConverterOptionalDuration: FfiConverterRustBuffer<java.time.Duration?> {
     override fun read(buf: ByteBuffer): java.time.Duration? {
         if (buf.get().toInt() == 0) {
             return null
@@ -5062,10 +4694,13 @@ object FfiConverterOptionalDuration : FfiConverterRustBuffer<java.time.Duration?
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterOptionalTypeProtocolConfig : FfiConverterRustBuffer<ProtocolConfig?> {
+public object FfiConverterOptionalTypeProtocolConfig: FfiConverterRustBuffer<ProtocolConfig?> {
     override fun read(buf: ByteBuffer): ProtocolConfig? {
         if (buf.get().toInt() == 0) {
             return null
@@ -5091,24 +4726,27 @@ object FfiConverterOptionalTypeProtocolConfig : FfiConverterRustBuffer<ProtocolC
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterSequenceString : FfiConverterRustBuffer<List<String>> {
-    override fun read(buf: ByteBuffer): List<String> {
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
-        return List<String>(len) {
+        return List<kotlin.String>(len) {
             FfiConverterString.read(buf)
         }
     }
 
-    override fun allocationSize(value: List<String>): ULong {
+    override fun allocationSize(value: List<kotlin.String>): ULong {
         val sizeForLength = 4UL
         val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
         return sizeForLength + sizeForItems
     }
 
-    override fun write(value: List<String>, buf: ByteBuffer) {
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
@@ -5116,10 +4754,13 @@ object FfiConverterSequenceString : FfiConverterRustBuffer<List<String>> {
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterSequenceTypeMessage : FfiConverterRustBuffer<List<Message>> {
+public object FfiConverterSequenceTypeMessage: FfiConverterRustBuffer<List<Message>> {
     override fun read(buf: ByteBuffer): List<Message> {
         val len = buf.getInt()
         return List<Message>(len) {
@@ -5141,10 +4782,13 @@ object FfiConverterSequenceTypeMessage : FfiConverterRustBuffer<List<Message>> {
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterSequenceTypeRemote : FfiConverterRustBuffer<List<Remote>> {
+public object FfiConverterSequenceTypeRemote: FfiConverterRustBuffer<List<Remote>> {
     override fun read(buf: ByteBuffer): List<Remote> {
         val len = buf.getInt()
         return List<Remote>(len) {
@@ -5166,10 +4810,13 @@ object FfiConverterSequenceTypeRemote : FfiConverterRustBuffer<List<Remote>> {
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterSequenceTypeTransfer : FfiConverterRustBuffer<List<Transfer>> {
+public object FfiConverterSequenceTypeTransfer: FfiConverterRustBuffer<List<Transfer>> {
     override fun read(buf: ByteBuffer): List<Transfer> {
         val len = buf.getInt()
         return List<Transfer>(len) {
@@ -5191,10 +4838,13 @@ object FfiConverterSequenceTypeTransfer : FfiConverterRustBuffer<List<Transfer>>
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterSequenceTypeVirtualEntry : FfiConverterRustBuffer<List<VirtualEntry>> {
+public object FfiConverterSequenceTypeVirtualEntry: FfiConverterRustBuffer<List<VirtualEntry>> {
     override fun read(buf: ByteBuffer): List<VirtualEntry> {
         val len = buf.getInt()
         return List<VirtualEntry>(len) {
@@ -5216,10 +4866,13 @@ object FfiConverterSequenceTypeVirtualEntry : FfiConverterRustBuffer<List<Virtua
     }
 }
 
+
+
+
 /**
  * @suppress
  */
-object FfiConverterSequenceTypeVirtualMetadata : FfiConverterRustBuffer<List<VirtualMetadata>> {
+public object FfiConverterSequenceTypeVirtualMetadata: FfiConverterRustBuffer<List<VirtualMetadata>> {
     override fun read(buf: ByteBuffer): List<VirtualMetadata> {
         val len = buf.getInt()
         return List<VirtualMetadata>(len) {
@@ -5241,22 +4894,33 @@ object FfiConverterSequenceTypeVirtualMetadata : FfiConverterRustBuffer<List<Vir
     }
 }
 
-@Throws(VirtualFilesystemException::class)
-fun setVirtualFilesystem(vfs: VirtualFilesystem) =
+
+
+
+
+
+
+
+    @Throws(VirtualFilesystemException::class) fun `setVirtualFilesystem`(`vfs`: VirtualFilesystem)
+        = 
     uniffiRustCallWithError(VirtualFilesystemException) { _status ->
-        UniffiLib.uniffi_warpinator_fn_func_set_virtual_filesystem(
-
-            FfiConverterTypeVirtualFilesystem.lower(vfs), _status,
-        )
-    }
-
-fun setTracingSubscriber(tag: String, maxLevel: LogLevel) = uniffiRustCall { _status ->
-    UniffiLib.uniffi_warpinator_fn_func_set_tracing_subscriber(
-
-        FfiConverterString.lower(tag), FfiConverterTypeLogLevel.lower(maxLevel), _status,
-    )
+    UniffiLib.uniffi_warpinator_fn_func_set_virtual_filesystem(
+    
+        
+        FfiConverterTypeVirtualFilesystem.lower(`vfs`),_status)
 }
-
-
+    
+    
+ fun `setTracingSubscriber`(`tag`: kotlin.String, `maxLevel`: LogLevel)
+        = 
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_warpinator_fn_func_set_tracing_subscriber(
+    
+        
+        FfiConverterString.lower(`tag`),
+        FfiConverterTypeLogLevel.lower(`maxLevel`),_status)
+}
+    
+    
 
 

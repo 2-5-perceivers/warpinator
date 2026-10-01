@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 mdns-sd = "0.18.2"
 prost = "0.14.3"
-tokio = { version = "1.50.0", features = ["full"] }
+tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1.18"
 tonic = { version = "0.14.5", features = ["tls-ring"] }
 hostname = "0.4.2"
@@ -20,7 +20,7 @@ sha2 = "0.10.9"
 rand = "0.10.0"
 thiserror = "2.0.18"
 base64 = "0.22.1"
-tokio-util = "0.7.18"
+tokio-util = "0.7.19"
 local-ip-address = "0.6.10"
 uuid = { version = "1.22.0", features = ["v4"] }
 chrono = "0.4.44"

@@ -29,7 +29,10 @@ import org.perceivers25.warpinator.core.utils.Utils
 class MainActivity : ComponentActivity() {
     val keyShortcutDispatcher = KeyShortcutDispatcher()
 
-    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+    override fun onKeyDown(
+        keyCode: Int,
+        event: android.view.KeyEvent?,
+    ): Boolean {
         if (event != null && keyShortcutDispatcher.dispatch(KeyEvent(event))) return true
         return super.onKeyDown(keyCode, event)
     }
@@ -39,7 +42,20 @@ class MainActivity : ComponentActivity() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
+                requestPermissions(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    3,
+                )
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+            if (checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
+
+                requestPermissions(
+                    arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK),
+                    4,
+                )
             }
         }
 

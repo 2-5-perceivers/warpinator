@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -19,18 +20,22 @@ kotlin {
     }
 }
 
+val ndkVersion = "30.0.16248370"
+
 android {
     namespace = "org.perceivers25.warpinator"
     compileSdk {
-        version = release(36) {
+        version = release(37) {
             minorApiLevel = 1
         }
     }
 
+    ndkVersion = "30.0.16248370"
+
     defaultConfig {
         applicationId = "org.perceivers25.warpinator"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 10
         versionName = "0.1"
     }
@@ -38,6 +43,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -93,4 +99,60 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.18.1@aar")
 
     testImplementation(libs.junit)
+}
+
+val ffiBindingsDir = rootProject.projectDir.parentFile.resolve("ffi-bindings")
+
+fun findNdkDir(): String? {
+    // Check environment first (CI / developer override)
+    val envNdk = System.getenv("ANDROID_NDK_HOME")
+    if (!envNdk.isNullOrEmpty()) {
+        return envNdk
+    }
+    val localPropertiesFile = rootProject.projectDir.resolve("local.properties")
+    if (localPropertiesFile.exists()) {
+        val properties = Properties()
+        localPropertiesFile.inputStream().use { properties.load(it) }
+        // Explicit ndk.dir takes priority
+        val ndkDir = properties.getProperty("ndk.dir")
+        if (!ndkDir.isNullOrEmpty()) {
+            return ndkDir
+        }
+        // Derive from sdk.dir + hardcoded ndkVersion
+        val sdkDir = properties.getProperty("sdk.dir")
+        if (!sdkDir.isNullOrEmpty()) {
+            val versionedNdk = file("$sdkDir/ndk/$ndkVersion")
+            if (versionedNdk.exists()) {
+                return versionedNdk.absolutePath
+            }
+        }
+    }
+    return null
+}
+
+val buildRustLibs by tasks.registering(Exec::class) {
+    description = "Compile Rust FFI libraries for all Android architectures and generate Kotlin bindings"
+    group = "build"
+    workingDir = ffiBindingsDir
+
+    val ndkDir = findNdkDir()
+    if (ndkDir != null) {
+        environment("ANDROID_NDK_HOME", ndkDir)
+    }
+
+    val userHome = System.getProperty("user.home")
+    val currentPath = System.getenv("PATH") ?: ""
+    environment("PATH", "$userHome/.cargo/bin:$currentPath")
+
+    commandLine("cargo", "run", "--bin", "build-android", "--features", "virtual_filesystem")
+}
+
+tasks.named("preBuild") {
+    dependsOn(buildRustLibs)
+}
+
+tasks.named<Delete>("clean") {
+    delete(fileTree("src/main/jniLibs") {
+        include("**/*.so")
+    })
 }

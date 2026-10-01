@@ -1,8 +1,8 @@
 #[cfg(feature = "virtual_filesystem")]
 mod vfs {
-    use thiserror::Error;
+    use warpinator_lib::filesystem::vfs::{VirtualEntry, VirtualFilesystemError, VirtualMetadata};
 
-    #[derive(uniffi::Error, Error, Debug)]
+    #[uniffi::remote(Error)]
     pub enum VirtualFilesystemError {
         #[error("Filesystem already set")]
         AlreadySet,
@@ -20,35 +20,7 @@ mod vfs {
         FileCreateError,
     }
 
-    impl From<VirtualFilesystemError> for warpinator_lib::filesystem::vfs::VirtualFilesystemError {
-        fn from(value: VirtualFilesystemError) -> Self {
-            match value {
-                VirtualFilesystemError::AlreadySet => {
-                    warpinator_lib::filesystem::vfs::VirtualFilesystemError::AlreadySet
-                }
-                VirtualFilesystemError::NotSet => {
-                    warpinator_lib::filesystem::vfs::VirtualFilesystemError::NotSet
-                }
-                VirtualFilesystemError::FileNotFound => {
-                    warpinator_lib::filesystem::vfs::VirtualFilesystemError::FileNotFound
-                }
-                VirtualFilesystemError::FileAlreadyExists => {
-                    warpinator_lib::filesystem::vfs::VirtualFilesystemError::FileAlreadyExists
-                }
-                VirtualFilesystemError::PermissionDenied => {
-                    warpinator_lib::filesystem::vfs::VirtualFilesystemError::PermissionDenied
-                }
-                VirtualFilesystemError::InvalidPath => {
-                    warpinator_lib::filesystem::vfs::VirtualFilesystemError::InvalidPath
-                }
-                VirtualFilesystemError::FileCreateError => {
-                    warpinator_lib::filesystem::vfs::VirtualFilesystemError::FileCreateError
-                }
-            }
-        }
-    }
-
-    #[derive(uniffi::Record)]
+    #[uniffi::remote(Record)]
     pub struct VirtualMetadata {
         pub is_dir: bool,
         pub name: String,
@@ -56,32 +28,11 @@ mod vfs {
         pub file_count: u64,
     }
 
-    impl From<VirtualMetadata> for warpinator_lib::filesystem::vfs::VirtualMetadata {
-        fn from(value: VirtualMetadata) -> Self {
-            Self {
-                is_dir: value.is_dir,
-                name: value.name,
-                size: value.size,
-                file_count: value.file_count,
-            }
-        }
-    }
-
-    #[derive(uniffi::Record)]
+    #[uniffi::remote(Record)]
     pub struct VirtualEntry {
         pub is_dir: bool,
         pub path: String,
         pub name: String,
-    }
-
-    impl From<VirtualEntry> for warpinator_lib::filesystem::vfs::VirtualEntry {
-        fn from(value: VirtualEntry) -> Self {
-            Self {
-                is_dir: value.is_dir,
-                path: value.path,
-                name: value.name,
-            }
-        }
     }
 
     pub type Result<T> = std::result::Result<T, VirtualFilesystemError>;
@@ -100,18 +51,14 @@ mod vfs {
     struct VirtualFilesystemWrapper {
         inner: Box<dyn VirtualFilesystem>,
     }
-    type InnerResult<T> =
-        std::result::Result<T, warpinator_lib::filesystem::vfs::VirtualFilesystemError>;
+    type InnerResult<T> = std::result::Result<T, VirtualFilesystemError>;
 
     #[async_trait::async_trait]
     impl warpinator_lib::filesystem::vfs::VirtualFilesystem for VirtualFilesystemWrapper {
-        async fn metadata(
-            &self,
-            path: String,
-        ) -> InnerResult<warpinator_lib::filesystem::vfs::VirtualMetadata> {
+        async fn metadata(&self, path: String) -> InnerResult<VirtualMetadata> {
             let meta = self.inner.metadata(path).await?;
 
-            Ok(warpinator_lib::filesystem::vfs::VirtualMetadata {
+            Ok(VirtualMetadata {
                 is_dir: meta.is_dir,
                 name: meta.name,
                 size: meta.size,
@@ -119,19 +66,13 @@ mod vfs {
             })
         }
 
-        async fn read_dir(
-            &self,
-            path: String,
-        ) -> InnerResult<Vec<warpinator_lib::filesystem::vfs::VirtualMetadata>> {
+        async fn read_dir(&self, path: String) -> InnerResult<Vec<VirtualMetadata>> {
             let entries = self.inner.read_dir(path).await?;
 
             Ok(entries.into_iter().map(|meta| meta.into()).collect())
         }
 
-        async fn list_dir(
-            &self,
-            path: String,
-        ) -> InnerResult<Vec<warpinator_lib::filesystem::vfs::VirtualEntry>> {
+        async fn list_dir(&self, path: String) -> InnerResult<Vec<VirtualEntry>> {
             let entries = self.inner.list_dir(path).await?;
             Ok(entries.into_iter().map(|meta| meta.into()).collect())
         }

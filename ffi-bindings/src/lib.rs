@@ -7,8 +7,6 @@ pub mod tracing;
 pub mod types;
 
 use crate::config::{ProtocolConfig, UserConfig};
-#[cfg(feature = "messaging")]
-use crate::types::message::Message;
 use crate::types::remote::Remote;
 use crate::types::transfer::Transfer;
 use ::tracing as tracing_crate;
@@ -16,6 +14,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::broadcast::error::RecvError;
 use warpinator_lib::remote_manager::WarpEvent;
+#[cfg(feature = "messaging")]
+use warpinator_lib::types::message::Message;
 
 uniffi::setup_scaffolding!("warpinator");
 
@@ -400,7 +400,6 @@ impl Warpinator {
             .message(remote_uuid, message_uuid)
             .await
             .ok_or(WarpError::NotFound)
-            .map(|m| Message::from(&m))
     }
 
     pub async fn messages(&self, remote_uuid: &str) -> Result<Vec<Message>> {
@@ -408,10 +407,7 @@ impl Warpinator {
             .manager()?
             .messages(remote_uuid)
             .await
-            .ok_or(WarpError::NotFound)?
-            .iter()
-            .map(Message::from)
-            .collect())
+            .ok_or(WarpError::NotFound)?)
     }
 
     pub async fn remove_message(&self, remote_uuid: &str, message_uuid: &str) -> Result<()> {
