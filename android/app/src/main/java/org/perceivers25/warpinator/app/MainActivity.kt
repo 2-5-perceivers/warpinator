@@ -46,22 +46,24 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(
-                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                    3,
-                )
+        buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && checkSelfPermission(
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
             }
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
-            if (checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(
-                    arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK),
-                    4,
-                )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN && checkSelfPermission(
+                    Manifest.permission.ACCESS_LOCAL_NETWORK,
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.ACCESS_LOCAL_NETWORK)
             }
+        }.also { permissions ->
+            if (permissions.isNotEmpty()) requestPermissions(
+                permissions.toTypedArray(),
+                3,
+            )
         }
 
         if (!Utils.isMyServiceRunning(this, MainService::class.java)) {
