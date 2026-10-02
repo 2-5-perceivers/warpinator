@@ -21,13 +21,19 @@ import dagger.hilt.android.AndroidEntryPoint
 import org.perceivers25.warpinator.core.data.ThemeViewModel
 import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
 import org.perceivers25.warpinator.core.service.MainService
+import org.perceivers25.warpinator.core.system.PreferenceManager
 import org.perceivers25.warpinator.core.utils.KeyShortcutDispatcher
 import org.perceivers25.warpinator.core.utils.LocalKeyShortcutDispatcher
 import org.perceivers25.warpinator.core.utils.Utils
+import org.perceivers25.warpinator.core.utils.validateDownloadDir
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     val keyShortcutDispatcher = KeyShortcutDispatcher()
+
+    @Inject
+    lateinit var prefs: PreferenceManager
 
     override fun onKeyDown(
         keyCode: Int,
@@ -51,7 +57,6 @@ class MainActivity : ComponentActivity() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
             if (checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) != PackageManager.PERMISSION_GRANTED) {
-
                 requestPermissions(
                     arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK),
                     4,
@@ -62,6 +67,8 @@ class MainActivity : ComponentActivity() {
         if (!Utils.isMyServiceRunning(this, MainService::class.java)) {
             startService(Intent(this, MainService::class.java))
         }
+
+        val needsDirSetup = !validateDownloadDir(this, prefs.downloadDirUri)
 
         setContent {
             val navController = rememberNavController()
@@ -97,7 +104,7 @@ class MainActivity : ComponentActivity() {
                 CompositionLocalProvider(
                     LocalKeyShortcutDispatcher provides keyShortcutDispatcher,
                 ) {
-                    WarpinatorApp(navController)
+                    WarpinatorApp(navController, needsDirSetup)
                 }
             }
         }

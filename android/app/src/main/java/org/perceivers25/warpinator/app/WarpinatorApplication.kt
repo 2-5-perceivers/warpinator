@@ -11,11 +11,16 @@ class WarpinatorApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // Clear old persisted URI permissions (except profile picture)
-        val picture: String =
-            PreferenceManager.getDefaultSharedPreferences(this).getString("profile", "0")!!
+        // Clear old persisted URI permissions, keeping only:
+        // - the profile picture URI
+        // - the selected download directory URI
+        val sharedPrefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val picture: String = sharedPrefs.getString("profile", "0")!!
+        val downloadDir: String? = sharedPrefs.getString("downloadDir", null)
+
         for (u in contentResolver.persistedUriPermissions) {
-            if (u.uri.toString() == picture) {
+            val uriStr = u.uri.toString()
+            if (uriStr == picture || uriStr == downloadDir) {
                 Log.v(TAG, "keeping permission for $u")
                 continue
             }
