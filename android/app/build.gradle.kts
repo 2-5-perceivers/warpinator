@@ -131,7 +131,8 @@ fun findNdkDir(): String? {
 }
 
 val buildRustLibs by tasks.registering(Exec::class) {
-    description = "Compile Rust FFI libraries for all Android architectures and generate Kotlin bindings"
+    description =
+        "Compile Rust FFI libraries for all Android architectures and generate Kotlin bindings"
     group = "build"
     workingDir = ffiBindingsDir
 
@@ -144,7 +145,14 @@ val buildRustLibs by tasks.registering(Exec::class) {
     val currentPath = System.getenv("PATH") ?: ""
     environment("PATH", "$userHome/.cargo/bin:$currentPath")
 
-    commandLine("cargo", "run", "--bin", "build-android", "--features", "virtual_filesystem")
+    commandLine(
+        "cargo",
+        "run",
+        "--bin",
+        "build-android",
+        "--features",
+        "virtual_filesystem",
+    )
 }
 
 tasks.named("preBuild") {
@@ -152,7 +160,9 @@ tasks.named("preBuild") {
 }
 
 tasks.named<Delete>("clean") {
-    delete(fileTree("src/main/jniLibs") {
-        include("**/*.so")
-    })
+    delete(
+        fileTree("src/main/jniLibs") {
+            include("**/*.so")
+        },
+    )
 }

@@ -66,7 +66,10 @@ object Utils {
             for (ni in nis) {
                 if ((!ni.isLoopback) && ni.isUp) {
                     val name = ni.displayName
-                    if (name.contains("dummy") || name.contains("rmnet") || name.contains("ifb")) continue
+                    if (name.contains("dummy") || name.contains("rmnet") || name.contains(
+                            "ifb",
+                        )
+                    ) continue
                     if (getIPForIface(ni) == null)  // Skip ifaces with no IPv4 address
                         continue
                     Log.d(
@@ -112,7 +115,8 @@ object Utils {
         }
 
     fun dumpInterfaces(): String? {
-        val nis: Array<String?> = networkInterfaces ?: return "Failed to get network interfaces"
+        val nis: Array<String?> =
+            networkInterfaces ?: return "Failed to get network interfaces"
         return TextUtils.join("\n", nis)
     }
 
@@ -135,7 +139,8 @@ object Utils {
             if (ia.address.address.size == 4) {
                 // 4 for ipv4, 16 for ipv6
                 return IPInfo(
-                    (ia.address as Inet4Address?)!!, ia.networkPrefixLength.toInt(),
+                    (ia.address as Inet4Address?)!!,
+                    ia.networkPrefixLength.toInt(),
                 )
             }
         }
@@ -147,15 +152,19 @@ object Utils {
         var result: String? = null
         try {
             if ("content" == uri.scheme) {
-                val cursor = ctx.contentResolver.query(uri, null, null, null, null)
+                val cursor =
+                    ctx.contentResolver.query(uri, null, null, null, null)
                 if (cursor != null && cursor.moveToFirst()) {
-                    result = cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME))
+                    result =
+                        cursor.getString(cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME))
                     cursor.close()
                 }
             }
             if (result == null) {
-                val parts: Array<String?> = URLDecoder.decode(uri.toString()).split("/".toRegex())
-                    .dropLastWhile { it.isEmpty() }.toTypedArray()
+                val parts: Array<String?> = URLDecoder.decode(uri.toString())
+                    .split("/".toRegex())
+                    .dropLastWhile { it.isEmpty() }
+                    .toTypedArray()
                 return parts[parts.size - 1]
             }
         } catch (_: Exception) {
@@ -185,7 +194,8 @@ object Utils {
         val connManager =
             checkNotNull(ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
         val wifi = connManager.getNetworkInfo(ConnectivityManager.TYPE_WIFI)
-        val ethernet = connManager.getNetworkInfo(ConnectivityManager.TYPE_ETHERNET)
+        val ethernet =
+            connManager.getNetworkInfo(ConnectivityManager.TYPE_ETHERNET)
         return (wifi != null && wifi.isConnected) || (ethernet != null && ethernet.isConnected)
     }
 
@@ -195,7 +205,8 @@ object Utils {
         )
         try {
             val method = manager.javaClass.getDeclaredMethod("isWifiApEnabled")
-            method.isAccessible = true // in the case of visibility change in future APIs
+            method.isAccessible =
+                true // in the case of visibility change in future APIs
             return (method.invoke(manager) as Boolean?)!!
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get hotspot state", e)
@@ -206,13 +217,15 @@ object Utils {
 
     @JvmStatic
     fun generateServiceName(context: Context): String {
-        return getDeviceName(context).uppercase().replace(" ", "") + "-" + getRandomHexString(6)
+        return getDeviceName(context).uppercase()
+            .replace(" ", "") + "-" + getRandomHexString(6)
     }
 
     fun getRandomHexString(len: Int): String {
         val buf = CharArray(len)
         val random = Random()
-        for (idx in buf.indices) buf[idx] = HEX_ARRAY[random.nextInt(HEX_ARRAY.size)]
+        for (idx in buf.indices) buf[idx] =
+            HEX_ARRAY[random.nextInt(HEX_ARRAY.size)]
         return String(buf)
     }
 

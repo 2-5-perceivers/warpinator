@@ -9,12 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropEvent
@@ -44,7 +39,9 @@ fun rememberDropTargetState(
     val activity = LocalActivity.current
 
     val currentOnDrop by rememberUpdatedState(onUrisDropped)
-    val currentShouldStartDragAndDrop by rememberUpdatedState(shouldStartDragAndDrop)
+    val currentShouldStartDragAndDrop by rememberUpdatedState(
+        shouldStartDragAndDrop,
+    )
 
     val fileDropTarget = remember(activity) {
         object : DragAndDropTarget {
@@ -71,7 +68,8 @@ fun rememberDropTargetState(
 
                 activity.requestDragAndDropPermissions(event.toAndroidDragEvent())
 
-                val clipData = event.toAndroidDragEvent().clipData ?: return false
+                val clipData =
+                    event.toAndroidDragEvent().clipData ?: return false
                 val uris = (0 until clipData.itemCount).mapNotNull { i ->
                     clipData.getItemAt(i).uri
                 }

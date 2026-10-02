@@ -13,7 +13,10 @@ class FailedToSaveProfilePicture(
     @Composable
     override fun getState(): UiMessageState {
         return UiMessageState(
-            message = stringResource(R.string.failed_to_save_profile_picture, exception),
+            message = stringResource(
+                R.string.failed_to_save_profile_picture,
+                exception,
+            ),
             duration = SnackbarDuration.Long,
         )
 

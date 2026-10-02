@@ -8,39 +8,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.toAndroidDragEvent
@@ -108,8 +84,8 @@ fun ProfilePictureDialog(
             true
         },
         shouldStartDragAndDrop = shouldStartDragAndDrop@{ event ->
-            val description =
-                event.toAndroidDragEvent().clipDescription ?: return@shouldStartDragAndDrop false
+            val description = event.toAndroidDragEvent().clipDescription
+                ?: return@shouldStartDragAndDrop false
             return@shouldStartDragAndDrop when {
                 description.mimeTypeCount != 1 -> false
                 description.hasMimeType("image/*") -> true
@@ -171,7 +147,10 @@ fun ProfilePictureDialog(
                 Surface(
                     modifier = Modifier
                         .padding(
-                            top = 160.dp, start = 16.dp, end = 16.dp, bottom = 32.dp,
+                            top = 160.dp,
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = 32.dp,
                         )
                         .fillMaxWidth()
                         .clip(MaterialTheme.shapes.extraLarge),
@@ -183,7 +162,10 @@ fun ProfilePictureDialog(
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                         columns = GridCells.Adaptive(64.dp),
                         contentPadding = PaddingValues(
-                            top = 96.dp, start = 16.dp, end = 16.dp, bottom = 16.dp,
+                            top = 96.dp,
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = 16.dp,
                         ),
                     ) {
                         item {
@@ -261,10 +243,15 @@ fun ProfilePictureDialog(
                     )
                 }
                 Box(
-                    modifier = Modifier.offset(y = (80).dp), contentAlignment = Alignment.Center,
+                    modifier = Modifier.offset(y = (80).dp),
+                    contentAlignment = Alignment.Center,
                 ) {
                     val currentBitmap = remember(selectedKey, imageSignature) {
-                        ProfilePicturePainter.getProfilePicture(selectedKey, context, true)
+                        ProfilePicturePainter.getProfilePicture(
+                            selectedKey,
+                            context,
+                            true,
+                        )
                     }
 
                     Image(
@@ -274,7 +261,9 @@ fun ProfilePictureDialog(
                         modifier = Modifier
                             .size(160.dp)
                             .border(
-                                8.dp, MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape,
+                                8.dp,
+                                MaterialTheme.colorScheme.surfaceContainerHigh,
+                                CircleShape,
                             )
                             .padding(8.dp)
                             .clip(CircleShape),

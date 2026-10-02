@@ -13,22 +13,23 @@ import org.perceivers25.warpinator.core.utils.messages.SucceededToWriteLog
 import java.io.File
 
 object LogFileWriter {
-    suspend fun generateDumpLog(context: Context): File? = withContext(Dispatchers.IO) {
-        Log.d(TAG, "Saving log...")
+    suspend fun generateDumpLog(context: Context): File? =
+        withContext(Dispatchers.IO) {
+            Log.d(TAG, "Saving log...")
 
-        val cacheDir = context.externalCacheDir ?: context.cacheDir
-        val output = File(cacheDir, "dump.log")
+            val cacheDir = context.externalCacheDir ?: context.cacheDir
+            val output = File(cacheDir, "dump.log")
 
-        try {
-            val cmd = arrayOf("logcat", "-d", "-f", output.absolutePath)
-            val process = Runtime.getRuntime().exec(cmd)
-            process.waitFor()
-            output
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to dump log", e)
-            null
+            try {
+                val cmd = arrayOf("logcat", "-d", "-f", output.absolutePath)
+                val process = Runtime.getRuntime().exec(cmd)
+                process.waitFor()
+                output
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to dump log", e)
+                null
+            }
         }
-    }
 
     fun writeLog(
         uri: Uri,
@@ -40,11 +41,12 @@ object LogFileWriter {
             scope.launch {
                 val file = generateDumpLog(context)
                 file?.let {
-                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        file.inputStream().use { inputStream ->
-                            inputStream.copyTo(outputStream)
+                    context.contentResolver.openOutputStream(uri)
+                        ?.use { outputStream ->
+                            file.inputStream().use { inputStream ->
+                                inputStream.copyTo(outputStream)
+                            }
                         }
-                    }
                     emitMessage(SucceededToWriteLog())
                 }
             }

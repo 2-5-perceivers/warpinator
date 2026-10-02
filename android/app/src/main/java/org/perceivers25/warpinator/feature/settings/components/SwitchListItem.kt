@@ -1,13 +1,7 @@
 package org.perceivers25.warpinator.feature.settings.components
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ListItemColors
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.ListItemShapes
-import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,7 +33,9 @@ fun SwitchListItem(
         } else null,
         trailingContent = {
             Switch(
-                checked = checked, onCheckedChange = onCheckedChange, enabled = enabled,
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled,
             )
         },
         enabled = enabled,

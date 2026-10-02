@@ -1,32 +1,13 @@
 package org.perceivers25.warpinator.feature.settings.components
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -57,7 +38,11 @@ fun OptionsDialog(
     onDismiss: () -> Unit,
     onOptionSelected: (Int) -> Unit,
 ) {
-    var selectedIndex by remember(currentSelectionIndex) { mutableIntStateOf(currentSelectionIndex) }
+    var selectedIndex by remember(currentSelectionIndex) {
+        mutableIntStateOf(
+            currentSelectionIndex,
+        )
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -74,7 +59,10 @@ fun OptionsDialog(
                     Modifier
                         .padding(
                             PaddingValues(
-                                bottom = 16.dp, top = 24.dp, start = 24.dp, end = 24.dp,
+                                bottom = 16.dp,
+                                top = 24.dp,
+                                start = 24.dp,
+                                end = 24.dp,
                             ),
                         )
                         .align(

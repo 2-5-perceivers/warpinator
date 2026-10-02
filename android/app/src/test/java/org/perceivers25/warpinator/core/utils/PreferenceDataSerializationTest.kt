@@ -1,11 +1,7 @@
 package org.perceivers25.warpinator.core.utils
 
 import org.junit.Test
-import org.perceivers25.warpinator.core.model.preferences.RecentRemote
-import org.perceivers25.warpinator.core.model.preferences.SavedFavourite
-import org.perceivers25.warpinator.core.model.preferences.recentRemotesFromJson
-import org.perceivers25.warpinator.core.model.preferences.savedFavouritesFromJson
-import org.perceivers25.warpinator.core.model.preferences.toJson
+import org.perceivers25.warpinator.core.model.preferences.*
 
 class PreferenceDataSerializationTest {
     @Test
@@ -24,7 +20,10 @@ class PreferenceDataSerializationTest {
 
     @Test
     fun `List RecentRemote  toJson serialization check`() {
-        val list = listOf(RecentRemote("host1", "hostname1"), RecentRemote("host2", "hostname2"))
+        val list = listOf(
+            RecentRemote("host1", "hostname1"),
+            RecentRemote("host2", "hostname2"),
+        )
         val json = list.toJson()
         assert(json == "[{\"host\":\"host1\",\"hostname\":\"hostname1\"},{\"host\":\"host2\",\"hostname\":\"hostname2\"}]")
     }

@@ -33,11 +33,15 @@ fun NotificationInhibitor(
     ) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                if (messages) notificationManager.ignoredRemoteMessageUuid = remoteUuid
-                if (transfers) notificationManager.ignoredRemoteTransferUuid = remoteUuid
+                if (messages) notificationManager.ignoredRemoteMessageUuid =
+                    remoteUuid
+                if (transfers) notificationManager.ignoredRemoteTransferUuid =
+                    remoteUuid
             } else if (event == Lifecycle.Event.ON_PAUSE) {
-                if (messages) notificationManager.ignoredRemoteMessageUuid = null
-                if (transfers) notificationManager.ignoredRemoteTransferUuid = null
+                if (messages) notificationManager.ignoredRemoteMessageUuid =
+                    null
+                if (transfers) notificationManager.ignoredRemoteTransferUuid =
+                    null
             }
         }
 

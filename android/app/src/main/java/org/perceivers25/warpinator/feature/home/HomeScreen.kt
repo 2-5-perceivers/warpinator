@@ -1,18 +1,7 @@
 package org.perceivers25.warpinator.feature.home
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.layout.AnimatedPane
@@ -89,7 +78,8 @@ fun HomeScreen(
 
     val scaffoldValue = navigator.scaffoldValue
     val isPrimaryExpanded = scaffoldValue.primary == PaneAdaptedValue.Expanded
-    val isSecondaryExpanded = scaffoldValue.secondary == PaneAdaptedValue.Expanded
+    val isSecondaryExpanded =
+        scaffoldValue.secondary == PaneAdaptedValue.Expanded
     val isTertiaryExpanded = scaffoldValue.tertiary == PaneAdaptedValue.Expanded
 
     val secondaryPaneMode = isPrimaryExpanded && isSecondaryExpanded
@@ -101,9 +91,15 @@ fun HomeScreen(
     } else WindowInsets(0)
 
     val detailPaneCI = when {
-        secondaryPaneMode && isTertiaryExpanded -> WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+        secondaryPaneMode && isTertiaryExpanded -> WindowInsets.safeDrawing.only(
+            WindowInsetsSides.Horizontal,
+        )
+
         secondaryPaneMode -> WindowInsets.safeDrawing.only(WindowInsetsSides.Start)
-        !secondaryPaneMode && isTertiaryExpanded -> WindowInsets.safeDrawing.only(WindowInsetsSides.End)
+        !secondaryPaneMode && isTertiaryExpanded -> WindowInsets.safeDrawing.only(
+            WindowInsetsSides.End,
+        )
+
         else -> WindowInsets(0)
     }
 
@@ -134,7 +130,9 @@ fun HomeScreen(
                             }
                         },
                         paneMode = secondaryPaneMode,
-                        onFavoriteToggle = { remote -> viewModel.toggleFavorite(remote.uuid) },
+                        onFavoriteToggle = { remote ->
+                            viewModel.toggleFavorite(remote.uuid)
+                        },
                     )
 
                 }
@@ -147,9 +145,14 @@ fun HomeScreen(
                             paneTitle = "Transfers list"
                         },
                 ) {
-                    val selectedUuid = navigator.currentDestination?.contentKey?.uuid
+                    val selectedUuid =
+                        navigator.currentDestination?.contentKey?.uuid
 
-                    val selectedRemote by (selectedUuid?.let { viewModel.getRemote(it) } ?: flowOf(
+                    val selectedRemote by (selectedUuid?.let {
+                        viewModel.getRemote(
+                            it,
+                        )
+                    } ?: flowOf(
                         null,
                     )).collectAsStateWithLifecycle(initialValue = null)
 
@@ -157,8 +160,14 @@ fun HomeScreen(
                         TransfersPane(
                             remote = selectedRemote!!,
                             paneMode = secondaryPaneMode,
-                            onBack = { scope.launch { navigator.navigateBack(backBehavior) } },
-                            onFavoriteToggle = { uuid -> viewModel.toggleFavorite(uuid) },
+                            onBack = {
+                                scope.launch {
+                                    navigator.navigateBack(backBehavior)
+                                }
+                            },
+                            onFavoriteToggle = { uuid ->
+                                viewModel.toggleFavorite(uuid)
+                            },
                             onOpenMessagesPane = {
                                 scope.launch {
                                     navigator.navigateTo(
@@ -170,7 +179,10 @@ fun HomeScreen(
                         )
                     } else {
                         // Placeholder for Tablet Landscape when no device is selected
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
                             Text(
                                 "Please select a device",
                                 style = MaterialTheme.typography.bodyLarge,
@@ -181,8 +193,13 @@ fun HomeScreen(
                 }
             },
             extraPane = extraPane@{
-                val selectedUuid = navigator.currentDestination?.contentKey?.uuid
-                val selectedRemote by (selectedUuid?.let { viewModel.getRemote(it) } ?: flowOf(
+                val selectedUuid =
+                    navigator.currentDestination?.contentKey?.uuid
+                val selectedRemote by (selectedUuid?.let {
+                    viewModel.getRemote(
+                        it,
+                    )
+                } ?: flowOf(
                     null,
                 )).collectAsStateWithLifecycle(initialValue = null)
 
@@ -198,7 +215,11 @@ fun HomeScreen(
                     MessagesPane(
                         remote = selectedRemote!!,
                         paneMode = tertiaryPaneMode,
-                        onBack = { scope.launch { navigator.navigateBack(backBehavior) } },
+                        onBack = {
+                            scope.launch {
+                                navigator.navigateBack(backBehavior)
+                            }
+                        },
                     )
                 }
             },

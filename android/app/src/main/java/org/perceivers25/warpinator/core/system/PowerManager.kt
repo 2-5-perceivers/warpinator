@@ -22,14 +22,17 @@ class WarpinatorPowerManager @Inject constructor(
     private var lockCount: AtomicInt = AtomicInt(0)
 
     init {
-        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val powerManager =
+            context.getSystemService(Context.POWER_SERVICE) as PowerManager
         // PARTIAL_WAKE_LOCK ensures the CPU runs, but screen can turn off.
-        wakeLock =
-            powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$TAG::WakeLock").apply {
-                // Important: Reference counting allows multiple transfers to "hold" the lock.
-                // The CPU stays awake until the lock is released as many times as it was acquired.
-                setReferenceCounted(true)
-            }
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "$TAG::WakeLock",
+        ).apply {
+            // Important: Reference counting allows multiple transfers to "hold" the lock.
+            // The CPU stays awake until the lock is released as many times as it was acquired.
+            setReferenceCounted(true)
+        }
     }
 
     // Suppress the timeout as a transfer might take longer than that, and I trust the lock guards in the native code to work

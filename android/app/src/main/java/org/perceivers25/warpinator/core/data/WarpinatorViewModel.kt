@@ -49,12 +49,18 @@ class WarpinatorViewModel @Inject constructor(
 
     // Remotes
 
-    fun getRemote(uuid: String): Flow<RemoteUi?> = repository.getRemoteFlow(uuid)
-    fun getTransfers(uuid: String): Flow<List<TransferUi>> = repository.getTransfersFlow(uuid)
-    fun getMessages(uuid: String): Flow<List<Message>> = repository.getMessagesFlow(uuid)
+    fun getRemote(uuid: String): Flow<RemoteUi?> =
+        repository.getRemoteFlow(uuid)
+
+    fun getTransfers(uuid: String): Flow<List<TransferUi>> =
+        repository.getTransfersFlow(uuid)
+
+    fun getMessages(uuid: String): Flow<List<Message>> =
+        repository.getMessagesFlow(uuid)
 
     fun connectRemote(uuid: String) = repository.connectRemote(uuid)
-    suspend fun manualConnectRemote(address: String) = repository.manualConnectRemote(address)
+    suspend fun manualConnectRemote(address: String) =
+        repository.manualConnectRemote(address)
 
     fun toggleFavorite(uuid: String) = repository.toggleFavorite(uuid)
 

@@ -20,7 +20,8 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
             if (isTreeUri) {
                 // For tree Uris, we need to get the document ID first
                 val documentId = DocumentsContract.getTreeDocumentId(uri)
-                val documentUri = DocumentsContract.buildDocumentUriUsingTree(uri, documentId)
+                val documentUri =
+                    DocumentsContract.buildDocumentUriUsingTree(uri, documentId)
                 queryMetadata(documentUri)
             } else {
                 // For single document Uris
@@ -53,7 +54,8 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
                     it.getLong(it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE))
                 val mimeType =
                     it.getString(it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE))
-                val isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+                val isDirectory =
+                    mimeType == DocumentsContract.Document.MIME_TYPE_DIR
 
                 VirtualMetadata(isDirectory, name, size.toULong(), 0.toULong())
             } else {
@@ -96,7 +98,8 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
                     val size =
                         it.getLong(it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE))
 
-                    val isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+                    val isDirectory =
+                        mimeType == DocumentsContract.Document.MIME_TYPE_DIR
 
                     val fileInfo = if (isDirectory) {
                         val (fileCount, totalSize) = calculateDirectoryStats(
@@ -143,10 +146,11 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
                 return emptyList()
             }
 
-            val childrenQueryUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                uri,
-                documentId,
-            )
+            val childrenQueryUri =
+                DocumentsContract.buildChildDocumentsUriUsingTree(
+                    uri,
+                    documentId,
+                )
 
             val cursor = context.contentResolver.query(
                 childrenQueryUri,
@@ -169,7 +173,8 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
                     val mimeType =
                         it.getString(it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE))
 
-                    val isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+                    val isDirectory =
+                        mimeType == DocumentsContract.Document.MIME_TYPE_DIR
 
                     val childUri = DocumentsContract.buildDocumentUriUsingTree(
                         uri,
@@ -199,13 +204,17 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
             val resolver = context.contentResolver
 
             var currentDocId = DocumentsContract.getTreeDocumentId(uri)
-            var currentUri = DocumentsContract.buildDocumentUriUsingTree(uri, currentDocId)
+            var currentUri =
+                DocumentsContract.buildDocumentUriUsingTree(uri, currentDocId)
 
             val parts = folder.split("/").filter { it.isNotBlank() }
 
             for (part in parts) {
                 val childrenUri =
-                    DocumentsContract.buildChildDocumentsUriUsingTree(uri, currentDocId)
+                    DocumentsContract.buildChildDocumentsUriUsingTree(
+                        uri,
+                        currentDocId,
+                    )
                 var foundDocId: String? = null
                 resolver.query(
                     childrenUri,
@@ -238,7 +247,10 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
 
                 if (foundDocId != null) {
                     currentDocId = foundDocId
-                    currentUri = DocumentsContract.buildDocumentUriUsingTree(uri, currentDocId)
+                    currentUri = DocumentsContract.buildDocumentUriUsingTree(
+                        uri,
+                        currentDocId,
+                    )
                 } else {
                     val newDirUri = DocumentsContract.createDocument(
                         resolver,
@@ -282,8 +294,12 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
             val resolver = context.contentResolver
 
             val lastSlashIndex = file.lastIndexOf('/')
-            val folderPath = if (lastSlashIndex != -1) file.substring(0, lastSlashIndex) else ""
-            val fileName = if (lastSlashIndex != -1) file.substring(lastSlashIndex + 1) else file
+            val folderPath = if (lastSlashIndex != -1) file.substring(
+                0,
+                lastSlashIndex,
+            ) else ""
+            val fileName =
+                if (lastSlashIndex != -1) file.substring(lastSlashIndex + 1) else file
 
             if (fileName.isBlank()) {
                 throw VirtualFilesystemException.FileCreateException()
@@ -296,8 +312,12 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
                 DocumentsContract.getTreeDocumentId(uri)
             }
 
-            val parentDirUri = DocumentsContract.buildDocumentUriUsingTree(uri, parentDocId)
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(uri, parentDocId)
+            val parentDirUri =
+                DocumentsContract.buildDocumentUriUsingTree(uri, parentDocId)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                uri,
+                parentDocId,
+            )
 
             var foundFileUri: Uri? = null
 
@@ -320,7 +340,11 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
                     val name = cursor.getString(nameIndex)
                     if (name == fileName) {
                         val docId = cursor.getString(idIndex)
-                        foundFileUri = DocumentsContract.buildDocumentUriUsingTree(uri, docId)
+                        foundFileUri =
+                            DocumentsContract.buildDocumentUriUsingTree(
+                                uri,
+                                docId,
+                            )
                         break
                     }
                 }
@@ -331,11 +355,16 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
             } else {
                 // Best effort to guess the MIME type, fallback to binary stream
                 val extension = fileName.substringAfterLast('.', "")
-                val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                val mimeType = MimeTypeMap.getSingleton()
+                    .getMimeTypeFromExtension(extension)
                     ?: "application/octet-stream"
 
-                DocumentsContract.createDocument(resolver, parentDirUri, mimeType, fileName)
-                    ?: throw VirtualFilesystemException.FileCreateException()
+                DocumentsContract.createDocument(
+                    resolver,
+                    parentDirUri,
+                    mimeType,
+                    fileName,
+                ) ?: throw VirtualFilesystemException.FileCreateException()
             }
 
             val pfd = resolver.openFileDescriptor(fileUri, "w")
@@ -357,7 +386,10 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
         var totalSize = 0L
 
         try {
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri,
+                documentId,
+            )
 
             val cursor = context.contentResolver.query(
                 childrenUri,
@@ -380,7 +412,8 @@ class WarpinatorVirtualFilesystem(val context: Context) : VirtualFilesystem {
                     val size =
                         it.getLong(it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE))
 
-                    val isDirectory = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+                    val isDirectory =
+                        mimeType == DocumentsContract.Document.MIME_TYPE_DIR
 
                     if (isDirectory) {
                         val (childFileCount, childSize) = calculateDirectoryStats(

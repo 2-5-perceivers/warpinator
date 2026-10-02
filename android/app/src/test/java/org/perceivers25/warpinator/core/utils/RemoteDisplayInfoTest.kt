@@ -13,7 +13,12 @@ class RemoteDisplayInfoTest {
         expectedSubtitle: String,
         expectedLabel: String?,
     ) {
-        val result = RemoteDisplayInfo.fromValues(displayName, userName, hostname, address)
+        val result = RemoteDisplayInfo.fromValues(
+            displayName,
+            userName,
+            hostname,
+            address,
+        )
 
         assertEquals("Title mismatch", expectedTitle, result.title)
         assertEquals("Subtitle mismatch", expectedSubtitle, result.subtitle)

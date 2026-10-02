@@ -8,7 +8,11 @@ import org.perceivers25.warpinator.core.system.PreferenceManager
  * Represents the available application theme modes.
  */
 enum class ThemeOptions(val key: String, @param:StringRes val label: Int) {
-    SYSTEM_DEFAULT(PreferenceManager.VAL_THEME_DEFAULT, R.string.system_default_theme), LIGHT_THEME(
+    SYSTEM_DEFAULT(
+        PreferenceManager.VAL_THEME_DEFAULT,
+        R.string.system_default_theme,
+    ),
+    LIGHT_THEME(
         PreferenceManager.VAL_THEME_LIGHT,
         R.string.light_theme,
     ),

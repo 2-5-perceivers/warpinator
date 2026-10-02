@@ -6,15 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MotionScheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -110,7 +102,9 @@ fun WarpinatorTheme(
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(
+                context,
+            )
         }
 
         darkTheme -> darkColorScheme
@@ -132,7 +126,8 @@ fun WarpinatorThemePreview() {
     @Composable
     fun colorPreview(color: Color, colorLabel: String) {
         Surface(
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp), color = color,
+            modifier = Modifier.padding(vertical = 8.dp, horizontal = 16.dp),
+            color = color,
         ) {
             Box(
                 contentAlignment = Alignment.Center,
@@ -151,15 +146,25 @@ fun WarpinatorThemePreview() {
 
                 colorPreview(MaterialTheme.colorScheme.surface, "Surface")
                 colorPreview(MaterialTheme.colorScheme.primary, "Primary")
-                colorPreview(MaterialTheme.colorScheme.primaryContainer, "Primary container")
+                colorPreview(
+                    MaterialTheme.colorScheme.primaryContainer,
+                    "Primary container",
+                )
                 colorPreview(MaterialTheme.colorScheme.secondary, "Secondary")
                 colorPreview(
-                    MaterialTheme.colorScheme.secondaryContainer, "Secondary container",
+                    MaterialTheme.colorScheme.secondaryContainer,
+                    "Secondary container",
                 )
                 colorPreview(MaterialTheme.colorScheme.tertiary, "Tertiary")
-                colorPreview(MaterialTheme.colorScheme.tertiaryContainer, "Tertiary container")
+                colorPreview(
+                    MaterialTheme.colorScheme.tertiaryContainer,
+                    "Tertiary container",
+                )
                 colorPreview(MaterialTheme.colorScheme.error, "Error")
-                colorPreview(MaterialTheme.colorScheme.errorContainer, "Error container")
+                colorPreview(
+                    MaterialTheme.colorScheme.errorContainer,
+                    "Error container",
+                )
 
             }
         }

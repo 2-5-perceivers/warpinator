@@ -2,7 +2,11 @@ package org.perceivers25.warpinator.core.utils
 
 import org.perceivers25.warpinator.core.model.ui.RemoteUi
 
-data class RemoteDisplayInfo(val title: String, val subtitle: String, val label: String?) {
+data class RemoteDisplayInfo(
+    val title: String,
+    val subtitle: String,
+    val label: String?,
+) {
 
     companion object {
         fun fromRemote(remote: RemoteUi): RemoteDisplayInfo = fromValues(
@@ -10,7 +14,10 @@ data class RemoteDisplayInfo(val title: String, val subtitle: String, val label:
         )
 
         fun fromValues(
-            displayName: String?, userName: String?, hostname: String?, address: String?,
+            displayName: String?,
+            userName: String?,
+            hostname: String?,
+            address: String?,
         ): RemoteDisplayInfo {
             val normalizedDisplayName = displayName?.takeIf { it.isNotBlank() }
             val normalizedUserName = userName?.takeIf { it.isNotBlank() }

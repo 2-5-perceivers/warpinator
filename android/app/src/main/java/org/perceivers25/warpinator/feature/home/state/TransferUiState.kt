@@ -186,7 +186,11 @@ private fun TransferUi.getStatusStrings(
                         )
                     }
 
-                    stringResource(R.string.time_details_remaining_fmt, minutes, seconds)
+                    stringResource(
+                        R.string.time_details_remaining_fmt,
+                        minutes,
+                        seconds,
+                    )
                 }
 
                 remaining < 86400 -> {
@@ -205,14 +209,21 @@ private fun TransferUi.getStatusStrings(
                         )
                     }
 
-                    stringResource(R.string.time_details_remaining_fmt, hours, minutes)
+                    stringResource(
+                        R.string.time_details_remaining_fmt,
+                        hours,
+                        minutes,
+                    )
                 }
 
                 else -> stringResource(R.string.time_over_day)
             }.let { bidi.unicodeWrap(it) }
 
-            val short =
-                stringResource(R.string.transfer_short_status_fmt, transferredSizeStr, totalSizeStr)
+            val short = stringResource(
+                R.string.transfer_short_status_fmt,
+                transferredSizeStr,
+                totalSizeStr,
+            )
             val long = stringResource(
                 R.string.transfer_long_status_fmt,
                 transferredSizeStr,
@@ -274,7 +285,8 @@ private fun TransferUi.getRemainingTime(): Int? {
     if (bytesPerSecond == 0L) {
         return null
     }
-    val secondsRemaining = ((totalBytes - bytesTransferred) / bytesPerSecond).toInt()
+    val secondsRemaining =
+        ((totalBytes - bytesTransferred) / bytesPerSecond).toInt()
     return secondsRemaining
 }
 

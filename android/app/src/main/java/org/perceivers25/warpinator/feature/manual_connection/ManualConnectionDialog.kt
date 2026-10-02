@@ -4,17 +4,7 @@ import android.content.ClipData
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -22,39 +12,9 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AddLink
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.ContentPasteGo
-import androidx.compose.material.icons.rounded.Done
-import androidx.compose.material.icons.rounded.HistoryToggleOff
-import androidx.compose.material.icons.rounded.PriorityHigh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.toShape
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.toMutableStateList
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,7 +54,8 @@ import org.perceivers25.warpinator.core.utils.transformers.ProtocolAddressInputV
 
 sealed interface ManualConnectionResult {
     data object Success : ManualConnectionResult
-    data class Exception(val exception: ManualConnectionException) : ManualConnectionResult
+    data class Exception(val exception: ManualConnectionException) :
+            ManualConnectionResult
 }
 
 data class RecentRemoteOption(
@@ -419,7 +380,8 @@ private fun QRCodeDialog(
                             it,
                             contentDescription = stringResource(R.string.qr_code_content_description),
                             colorFilter = BlendModeColorFilter(
-                                MaterialTheme.colorScheme.primary, BlendMode.SrcIn,
+                                MaterialTheme.colorScheme.primary,
+                                BlendMode.SrcIn,
                             ),
                             contentScale = ContentScale.FillHeight,
                             filterQuality = FilterQuality.None, // Force image to be crisp
@@ -483,16 +445,22 @@ private fun QuickSelectRemoteDialog(
 
     var showValidationError by remember { mutableStateOf(false) }
 
-    val fromClipboardLabel = stringResource(R.string.from_clipboard_recent_remote_label)
+    val fromClipboardLabel =
+        stringResource(R.string.from_clipboard_recent_remote_label)
     LaunchedEffect("GET_CLIPBOARD") {
         val clipData = clipboard.getClipEntry()?.clipData
         if ((clipData?.itemCount ?: 0) == 0) return@LaunchedEffect
 
-        var clipText = clipData?.getItemAt(0)?.text?.toString() ?: return@LaunchedEffect
+        var clipText =
+            clipData?.getItemAt(0)?.text?.toString() ?: return@LaunchedEffect
         if (!clipText.startsWith(ProtocolAddressInputValidator.scheme)) return@LaunchedEffect
 
         clipText = clipText.removePrefix(ProtocolAddressInputValidator.scheme)
-        if (!ProtocolAddressInputValidator.isValidIp(clipText, false)) return@LaunchedEffect
+        if (!ProtocolAddressInputValidator.isValidIp(
+                clipText,
+                false,
+            )
+        ) return@LaunchedEffect
 
         recentRemotes.add(
             0,
@@ -542,7 +510,8 @@ private fun QuickSelectRemoteDialog(
                     },
                     lineLimits = TextFieldLineLimits.SingleLine,
                     keyboardOptions = KeyboardOptions(
-                        imeAction = ImeAction.Done, keyboardType = KeyboardType.Unspecified,
+                        imeAction = ImeAction.Done,
+                        keyboardType = KeyboardType.Unspecified,
                     ),
                     inputTransformation = ProtocolAddressInputValidator(),
                     outputTransformation = IPAddressTransformer(MaterialTheme.colorScheme.onSurfaceVariant),
@@ -593,7 +562,10 @@ private fun QuickSelectRemoteDialog(
 @Composable
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 private fun RecentRemoteSegmentedListTile(
-    textFieldState: TextFieldState, remote: RecentRemoteOption, index: Int, listCount: Int,
+    textFieldState: TextFieldState,
+    remote: RecentRemoteOption,
+    index: Int,
+    listCount: Int,
 ) {
     SegmentedListItem(
         onClick = {
@@ -678,7 +650,11 @@ fun ManualConnectionQuickSelectRecentsDialogPreview() {
                 QuickSelectRemoteDialog(
                     clipboard = LocalClipboard.current, onDismiss = {},
                     recentRemotes = listOf(
-                        RecentRemoteOption("192.168.0.90:42001", "From clipboard", true),
+                        RecentRemoteOption(
+                            "192.168.0.90:42001",
+                            "From clipboard",
+                            true,
+                        ),
                         RecentRemoteOption("192.168.0.89:42001", "Device 1"),
                         RecentRemoteOption("192.168.0.233:42002", "Device 2"),
                     ),
@@ -689,18 +665,23 @@ fun ManualConnectionQuickSelectRecentsDialogPreview() {
     }
 }
 
-class ConnectionResultProvider : PreviewParameterProvider<ManualConnectionResult?> {
+class ConnectionResultProvider :
+        PreviewParameterProvider<ManualConnectionResult?> {
     override val values = sequenceOf(
         null,
         ManualConnectionResult.Success,
         ManualConnectionResult.Exception(ManualConnectionException.AlreadyConnected()),
         ManualConnectionResult.Exception(ManualConnectionException.AlreadyConnecting()),
-        ManualConnectionResult.Exception(ManualConnectionException.FailedToConnect("Network failure")),
+        ManualConnectionResult.Exception(
+            ManualConnectionException.FailedToConnect("Network failure"),
+        ),
         ManualConnectionResult.Exception(ManualConnectionException.FailedToRegister()),
         ManualConnectionResult.Exception(ManualConnectionException.InvalidUrl()),
         ManualConnectionResult.Exception(ManualConnectionException.RemoteInternal()),
         ManualConnectionResult.Exception(ManualConnectionException.RemoteUnimplemented()),
-        ManualConnectionResult.Exception(ManualConnectionException.RuntimeException(WarpException.RuntimeException())),
+        ManualConnectionResult.Exception(
+            ManualConnectionException.RuntimeException(WarpException.RuntimeException()),
+        ),
         ManualConnectionResult.Exception(ManualConnectionException.Unavailable()),
     )
 

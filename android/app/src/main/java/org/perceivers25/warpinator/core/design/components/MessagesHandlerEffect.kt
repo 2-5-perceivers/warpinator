@@ -21,7 +21,9 @@ fun MessagesHandlerEffect(
 ) {
     val context = LocalContext.current
 
-    val abstractMessage by messageProvider.collectAsStateWithLifecycle(initialValue = null)
+    val abstractMessage by messageProvider.collectAsStateWithLifecycle(
+        initialValue = null,
+    )
     val resolvedState = abstractMessage?.getState()
 
     LaunchedEffect(abstractMessage, resolvedState) {

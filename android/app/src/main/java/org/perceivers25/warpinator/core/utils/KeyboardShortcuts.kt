@@ -1,11 +1,6 @@
 package org.perceivers25.warpinator.core.utils
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.*
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.platform.LocalInspectionMode
 
@@ -28,9 +23,10 @@ class KeyShortcutDispatcher {
     }
 }
 
-val LocalKeyShortcutDispatcher = staticCompositionLocalOf<KeyShortcutDispatcher> {
-    error("No KeyShortcutDispatcher provided")
-}
+val LocalKeyShortcutDispatcher =
+    staticCompositionLocalOf<KeyShortcutDispatcher> {
+        error("No KeyShortcutDispatcher provided")
+    }
 
 @Composable
 fun KeyboardShortcuts(

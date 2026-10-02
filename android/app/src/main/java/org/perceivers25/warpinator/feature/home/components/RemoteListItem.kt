@@ -4,33 +4,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material.icons.rounded.StarBorder
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxState
-import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -41,11 +19,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.tooling.preview.PreviewDynamicColors
 import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
@@ -72,7 +46,8 @@ fun RemoteListItem(
     val status = remote.state
 
     val isError = status is RemoteState.Error
-    val isConnecting = status == RemoteState.Connecting || status == RemoteState.AwaitingDuplex
+    val isConnecting =
+        status == RemoteState.Connecting || status == RemoteState.AwaitingDuplex
     val isDisconnected = status == RemoteState.Disconnected
 
     val swipeToDismissState = rememberSwipeToDismissBoxState()
@@ -97,14 +72,16 @@ fun RemoteListItem(
     val isButtonHovered by buttonInteractionSource.collectIsHoveredAsState()
     val isButtonPressed by buttonInteractionSource.collectIsPressedAsState()
 
-    val showFavoriteAction = isTileHovered || isTileFocused || isButtonHovered || isButtonPressed
+    val showFavoriteAction =
+        isTileHovered || isTileFocused || isButtonHovered || isButtonPressed
 
-    val accessibilityState = remember(isFavorite, isError, isConnecting, isDisconnected) {
-        buildString {
-            if (isFavorite) append(favoriteLabel, " ")
-            append(connectionStateLabel)
+    val accessibilityState =
+        remember(isFavorite, isError, isConnecting, isDisconnected) {
+            buildString {
+                if (isFavorite) append(favoriteLabel, " ")
+                append(connectionStateLabel)
+            }
         }
-    }
 
     Box(
         modifier = Modifier
@@ -126,7 +103,8 @@ fun RemoteListItem(
             },
             content = {
                 val onClickLabel = stringResource(R.string.select_device_action)
-                val toggleActionLabel = stringResource(R.string.toggle_favorite_action)
+                val toggleActionLabel =
+                    stringResource(R.string.toggle_favorite_action)
                 SegmentedListItem(
                     onClick = onClick,
                     modifier = Modifier.semantics {
@@ -135,7 +113,9 @@ fun RemoteListItem(
                         customActions = listOf(
                             CustomAccessibilityAction(label = toggleActionLabel) {
                                 coroutineScope.launch {
-                                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                                    haptics.performHapticFeedback(
+                                        HapticFeedbackType.Confirm,
+                                    )
                                     swipeToDismissState.reset()
                                     onFavoriteToggle()
                                 }
@@ -164,18 +144,25 @@ fun RemoteListItem(
                     trailingContent = {
                         if (showFavoriteAction) {
                             TooltipIconButton(
-                                description = if (remote.isFavorite) stringResource(R.string.remove_from_favorites_label) else stringResource(
+                                description = if (remote.isFavorite) stringResource(
+                                    R.string.remove_from_favorites_label,
+                                ) else stringResource(
                                     R.string.add_to_favorites_label,
                                 ),
                                 onClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                                    haptics.performHapticFeedback(
+                                        HapticFeedbackType.Confirm,
+                                    )
                                     onFavoriteToggle()
                                 },
                                 icon = if (isFavorite) Icons.Rounded.Star else Icons.Rounded.StarBorder,
                                 interactionSource = buttonInteractionSource,
                             )
                         } else {
-                            Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+                            Icon(
+                                Icons.Rounded.ChevronRight,
+                                contentDescription = null,
+                            )
                         }
                     },
                     interactionSource = tileInteractionSource,
@@ -205,7 +192,8 @@ private fun SwipeBackground(
         MaterialTheme.colorScheme.primaryContainer
     }
 
-    val favoriteIcon = if (isFavorite) Icons.Rounded.FavoriteBorder else Icons.Rounded.Favorite
+    val favoriteIcon =
+        if (isFavorite) Icons.Rounded.FavoriteBorder else Icons.Rounded.Favorite
     val favoriteIconColor =
         if (isFavorite) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
 

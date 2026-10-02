@@ -8,39 +8,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MediumFlexibleTopAppBar
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -62,17 +36,14 @@ import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
 import org.perceivers25.warpinator.core.model.preferences.ThemeOptions
 import org.perceivers25.warpinator.core.system.AutoAcceptValue
 import org.perceivers25.warpinator.core.utils.ProfilePicturePainter
-import org.perceivers25.warpinator.feature.settings.components.OptionsDialog
-import org.perceivers25.warpinator.feature.settings.components.ProfilePictureDialog
-import org.perceivers25.warpinator.feature.settings.components.SettingsCategoryLabel
-import org.perceivers25.warpinator.feature.settings.components.SwitchListItem
-import org.perceivers25.warpinator.feature.settings.components.TextInputDialog
+import org.perceivers25.warpinator.feature.settings.components.*
 import org.perceivers25.warpinator.feature.settings.state.SettingsUiState
 import org.perceivers25.warpinator.feature.settings.state.SettingsViewModel
 
 @Composable
 fun SettingsScreen(
-    viewModel: SettingsViewModel = hiltViewModel(), launchDirPicker: Boolean = false,
+    viewModel: SettingsViewModel = hiltViewModel(),
+    launchDirPicker: Boolean = false,
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -81,7 +52,8 @@ fun SettingsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     MessagesHandlerEffect(
-        messageProvider = viewModel.uiMessages, snackbarHostState = snackbarHostState,
+        messageProvider = viewModel.uiMessages,
+        snackbarHostState = snackbarHostState,
     )
 
     val dirPickerLauncher =
@@ -123,7 +95,10 @@ fun SettingsScreen(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterial3ExpressiveApi::class,
+)
 @Composable
 fun SettingsScreenContent(
     state: SettingsUiState,
@@ -164,7 +139,10 @@ fun SettingsScreenContent(
     }
 
     fun openEdit(
-        titleRes: Int, currentValue: String, isNumber: Boolean = false, onConfirm: (String) -> Unit,
+        titleRes: Int,
+        currentValue: String,
+        isNumber: Boolean = false,
+        onConfirm: (String) -> Unit,
     ) {
         editDialogTitle = titleRes
         editDialogValue = currentValue
@@ -186,7 +164,10 @@ fun SettingsScreenContent(
 
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                        )
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -217,7 +198,12 @@ fun SettingsScreenContent(
                 )
                 val profilePictureBitmap = remember(
                     state.profilePictureKey, state.profileImageSignature,
-                ) { ProfilePicturePainter.getProfilePicture(state.profilePictureKey, context) }
+                ) {
+                    ProfilePicturePainter.getProfilePicture(
+                        state.profilePictureKey,
+                        context,
+                    )
+                }
                 SegmentedListItem(
                     content = { Text(stringResource(R.string.picture_settings_title)) },
                     trailingContent = {
@@ -242,10 +228,15 @@ fun SettingsScreenContent(
                     onClick = { onPickDownloadDir() },
                     trailingContent = {
                         AnimatedVisibility(
-                            visible = state.canResetDir, enter = fadeIn(), exit = fadeOut(),
+                            visible = state.canResetDir,
+                            enter = fadeIn(),
+                            exit = fadeOut(),
                         ) {
                             IconButton(onClick = onResetDownloadDir) {
-                                Icon(Icons.Default.Restore, contentDescription = "Reset to default")
+                                Icon(
+                                    Icons.Default.Restore,
+                                    contentDescription = "Reset to default",
+                                )
                             }
                         }
                     },
@@ -286,7 +277,9 @@ fun SettingsScreenContent(
                             acceptOptions.forEachIndexed { index, label ->
                                 ToggleButton(
                                     checked = state.autoAccept.ordinal == index,
-                                    onCheckedChange = { onAutoAcceptChange(AutoAcceptValue.entries[index]) },
+                                    onCheckedChange = {
+                                        onAutoAcceptChange(AutoAcceptValue.entries[index])
+                                    },
                                     modifier = Modifier
                                         .weight(1f)
                                         .widthIn(max = 50.dp)
@@ -361,7 +354,9 @@ fun SettingsScreenContent(
                     supportingContent = { Text(state.port) },
                     onClick = {
                         openEdit(
-                            R.string.port_settings_title, state.port, isNumber = true,
+                            R.string.port_settings_title,
+                            state.port,
+                            isNumber = true,
                         ) { onServerPortChange(it) }
                     },
                     shapes = ListItemDefaults.segmentedDynamicShapes(1, 3),
@@ -374,7 +369,9 @@ fun SettingsScreenContent(
                     supportingContent = { Text(state.authPort) },
                     onClick = {
                         openEdit(
-                            R.string.auth_port_settings_title, state.authPort, isNumber = true,
+                            R.string.auth_port_settings_title,
+                            state.authPort,
+                            isNumber = true,
                         ) { onAuthPortChange(it) }
                     },
                     shapes = ListItemDefaults.segmentedDynamicShapes(1, 3),
@@ -387,7 +384,8 @@ fun SettingsScreenContent(
                     supportingContent = {
                         Text(
                             if (state.networkInterface != "AUTO") stringResource(
-                                R.string.network_interface_settings_summary, state.networkInterface,
+                                R.string.network_interface_settings_summary,
+                                state.networkInterface,
                             )
                             else state.networkInterface,
                         )
@@ -403,7 +401,8 @@ fun SettingsScreenContent(
                 SettingsCategoryLabel(stringResource(R.string.aspect_settings_category))
 
                 val themeLabelResId = state.themeMode.label
-                val dynamicColorsSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                val dynamicColorsSupported =
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
                 SegmentedListItem(
                     content = { Text(stringResource(R.string.theme_settings_title)) },

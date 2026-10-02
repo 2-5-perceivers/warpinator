@@ -6,22 +6,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeContentPadding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialShapes
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.toShape
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -70,7 +59,9 @@ fun DynamicAvatarCircle(
             rotation.animateTo(
                 targetValue = 180f,
                 animationSpec = spring(
-                    dampingRatio = 0.7f, stiffness = 80f, visibilityThreshold = 1.0f,
+                    dampingRatio = 0.7f,
+                    stiffness = 80f,
+                    visibilityThreshold = 1.0f,
                 ),
             )
             rotation.snapTo(0f)
@@ -125,7 +116,9 @@ fun DynamicAvatarCircle(
                 )
             } else {
                 Icon(
-                    Icons.Rounded.Person, contentDescription = null, tint = iconColor,
+                    Icons.Rounded.Person,
+                    contentDescription = null,
+                    tint = iconColor,
                 )
             }
         }
@@ -136,11 +129,13 @@ fun DynamicAvatarCircle(
 @PreviewLightDark
 @Composable
 fun DynamicAvatarCirclePreview() {
-    val bitmap = ProfilePicturePainter.getProfilePicture("1", LocalContext.current)
+    val bitmap =
+        ProfilePicturePainter.getProfilePicture("1", LocalContext.current)
 
     WarpinatorTheme {
         Surface(
-            color = MaterialTheme.colorScheme.surface, modifier = Modifier.safeContentPadding(),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.safeContentPadding(),
         ) {
             FlowRow(
                 modifier = Modifier
@@ -159,7 +154,11 @@ fun DynamicAvatarCirclePreview() {
                 DynamicAvatarCircle(bitmap = bitmap, isLoading = true)
                 DynamicAvatarCircle(bitmap = bitmap, isFavorite = true)
                 DynamicAvatarCircle(bitmap = bitmap, hasError = true)
-                DynamicAvatarCircle(bitmap = bitmap, hasError = true, isFavorite = true)
+                DynamicAvatarCircle(
+                    bitmap = bitmap,
+                    hasError = true,
+                    isFavorite = true,
+                )
                 DynamicAvatarCircle(bitmap = bitmap, isDisabled = true)
 
                 // Increased size
@@ -167,7 +166,11 @@ fun DynamicAvatarCirclePreview() {
                 DynamicAvatarCircle(size = 84.dp, isLoading = true)
                 DynamicAvatarCircle(size = 84.dp, isFavorite = true)
                 DynamicAvatarCircle(size = 84.dp, hasError = true)
-                DynamicAvatarCircle(size = 84.dp, hasError = true, isFavorite = true)
+                DynamicAvatarCircle(
+                    size = 84.dp,
+                    hasError = true,
+                    isFavorite = true,
+                )
                 DynamicAvatarCircle(size = 84.dp, isDisabled = true)
             }
         }

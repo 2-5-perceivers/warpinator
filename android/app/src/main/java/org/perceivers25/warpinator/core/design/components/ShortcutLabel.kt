@@ -62,7 +62,10 @@ fun rememberShortcutLabelText(
 
 @Composable
 fun ShortcutLabel(
-    keyCode: Int, ctrl: Boolean = false, shift: Boolean = false, alt: Boolean = false,
+    keyCode: Int,
+    ctrl: Boolean = false,
+    shift: Boolean = false,
+    alt: Boolean = false,
     style: TextStyle = MaterialTheme.typography.labelSmall,
     color: Color = LocalContentColor.current.copy(alpha = 0.6f),
 ) {

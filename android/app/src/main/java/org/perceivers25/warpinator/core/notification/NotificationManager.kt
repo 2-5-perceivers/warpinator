@@ -29,7 +29,8 @@ class WarpinatorNotificationManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
 ) {
 
-    private val notificationMgr: NotificationManagerCompat = NotificationManagerCompat.from(context)
+    private val notificationMgr: NotificationManagerCompat =
+        NotificationManagerCompat.from(context)
     private var progressBuilder: NotificationCompat.Builder? = null
 
     var ignoredRemoteTransferUuid: String? = null
@@ -44,7 +45,10 @@ class WarpinatorNotificationManager @Inject constructor(
                             false,
                         )
                     ) {
-                        notificationMgr.cancel(statusBarNotification.tag, statusBarNotification.id)
+                        notificationMgr.cancel(
+                            statusBarNotification.tag,
+                            statusBarNotification.id,
+                        )
                     }
                 }
             }
@@ -61,7 +65,10 @@ class WarpinatorNotificationManager @Inject constructor(
                             false,
                         )
                     ) {
-                        notificationMgr.cancel(statusBarNotification.tag, statusBarNotification.id)
+                        notificationMgr.cancel(
+                            statusBarNotification.tag,
+                            statusBarNotification.id,
+                        )
                     }
                 }
             }
@@ -73,24 +80,32 @@ class WarpinatorNotificationManager @Inject constructor(
 
     fun createForegroundNotification(): Notification {
         val openIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            flags =
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
         val immutable = PendingIntent.FLAG_IMMUTABLE
-        val pendingIntent = PendingIntent.getActivity(context, 0, openIntent, immutable)
+        val pendingIntent =
+            PendingIntent.getActivity(context, 0, openIntent, immutable)
 
         val stopIntent = Intent(context, StopSvcReceiver::class.java).apply {
             action = MainService.ACTION_STOP
         }
-        val stopPendingIntent = PendingIntent.getBroadcast(context, 0, stopIntent, immutable)
+        val stopPendingIntent =
+            PendingIntent.getBroadcast(context, 0, stopIntent, immutable)
 
         return NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setContentTitle(context.getString(R.string.warpinator_notification_title))
             .setContentText(context.getString(R.string.warpinator_notification_subtitle))
-            .setSmallIcon(R.drawable.ic_notification).setContentIntent(pendingIntent).addAction(
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pendingIntent)
+            .addAction(
                 0,
                 context.getString(R.string.warpinator_notification_button),
                 stopPendingIntent,
-            ).setPriority(NotificationCompat.PRIORITY_LOW).setShowWhen(false).setOngoing(true)
+            )
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setShowWhen(false)
+            .setOngoing(true)
             .build()
     }
 
@@ -125,22 +140,28 @@ class WarpinatorNotificationManager @Inject constructor(
         )
 
         val notification =
-            NotificationCompat.Builder(context, CHANNEL_INCOMING_TRANSFERS).setContentTitle(
-                context.getString(
-                    R.string.incoming_transfer_notification,
-                    remoteName ?: context.getString(
-                        R.string.unknown,
+            NotificationCompat.Builder(context, CHANNEL_INCOMING_TRANSFERS)
+                .setContentTitle(
+                    context.getString(
+                        R.string.incoming_transfer_notification,
+                        remoteName ?: context.getString(
+                            R.string.unknown,
+                        ),
                     ),
-                ),
-            ).setContentText(contentText).setSmallIcon(android.R.drawable.stat_sys_download_done)
+                )
+                .setContentText(contentText)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
-                .setContentIntent(pendingIntent).setAutoCancel(true).setGroup(GROUP_INCOMING)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setGroup(GROUP_INCOMING)
                 .setExtras(
                     Bundle().apply {
                         putString("remote", remoteUuid)
                     },
-                ).build()
+                )
+                .build()
 
         notificationMgr.notify(notificationId, notification)
     }
@@ -171,15 +192,21 @@ class WarpinatorNotificationManager @Inject constructor(
             PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES).setContentTitle(
-            context.getString(
-                R.string.new_message_from,
-                remoteName ?: context.getString(R.string.unknown),
-            ),
-        ).setContentText(message).setSmallIcon(android.R.drawable.stat_sys_download_done)
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setContentTitle(
+                context.getString(
+                    R.string.new_message_from,
+                    remoteName ?: context.getString(R.string.unknown),
+                ),
+            )
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
-            .setContentIntent(pendingIntent).setAutoCancel(true).setGroup(GROUP_MESSAGES).setExtras(
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setGroup(GROUP_MESSAGES)
+            .setExtras(
                 Bundle().apply {
                     putString("remote", remoteUuid)
                     putBoolean("message", true)
@@ -257,14 +284,17 @@ class WarpinatorNotificationManager @Inject constructor(
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            val manager =
+                context.getSystemService(NotificationManager::class.java)
+                    ?: return
 
             val serviceChannel = NotificationChannel(
                 CHANNEL_SERVICE,
                 context.getString(R.string.service_running),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = context.getString(R.string.notification_channel_description)
+                description =
+                    context.getString(R.string.notification_channel_description)
             }
 
             val incomingChannel = NotificationChannel(

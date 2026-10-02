@@ -4,12 +4,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.ConnectivityManager
+import android.net.*
 import android.net.ConnectivityManager.NetworkCallback
-import android.net.LinkProperties
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiManager.MulticastLock
 import android.os.Build
@@ -57,7 +53,11 @@ class MainService : LifecycleService() {
         return false
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int,
+    ): Int {
         super.onStartCommand(intent, flags, startId)
         notificationMgr = NotificationManagerCompat.from(this)
 
@@ -118,7 +118,10 @@ class MainService : LifecycleService() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         super.onTimeout(startId, fgsType)
-        Log.e(TAG, "Service has run out of time and must be stopped (Android 15+)")
+        Log.e(
+            TAG,
+            "Service has run out of time and must be stopped (Android 15+)",
+        )
         stopSelf()
     }
 
@@ -184,9 +187,11 @@ class MainService : LifecycleService() {
     private fun listenOnNetworkChanges() {
         connMgr = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
 
-        val nr = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        val nr = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED).build()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            .build()
 
         networkCallback = object : NetworkCallback() {
             override fun onAvailable(network: Network) {
@@ -201,7 +206,10 @@ class MainService : LifecycleService() {
                 onNetworkLost()
             }
 
-            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+            override fun onLinkPropertiesChanged(
+                network: Network,
+                linkProperties: LinkProperties,
+            ) {
                 Log.d(TAG, "Link properties changed")
                 onNetworkChanged()
             }
@@ -209,7 +217,8 @@ class MainService : LifecycleService() {
 
         apStateChangeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                val apState = intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE, 0)
+                val apState =
+                    intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE, 0)
                 if (apState % 10 == WifiManager.WIFI_STATE_ENABLED) {
                     Log.d(TAG, "AP was enabled")
                     repository.updateNetworkState { it.copy(isHotspot = true) }
@@ -225,7 +234,8 @@ class MainService : LifecycleService() {
         // Manually get state, some devices don't fire broadcast when registered
         repository.updateNetworkState { it.copy(isHotspot = isHotspotOn) }
         registerReceiver(
-            apStateChangeReceiver, IntentFilter("android.net.wifi.WIFI_AP_STATE_CHANGED"),
+            apStateChangeReceiver,
+            IntentFilter("android.net.wifi.WIFI_AP_STATE_CHANGED"),
         )
 
         networkCallback?.let {
@@ -236,9 +246,11 @@ class MainService : LifecycleService() {
     private val isHotspotOn: Boolean
         get() {
             val manager =
-                applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager ?: return false
+                applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager
+                    ?: return false
             try {
-                val method = manager.javaClass.getDeclaredMethod("isWifiApEnabled")
+                val method =
+                    manager.javaClass.getDeclaredMethod("isWifiApEnabled")
                 method.isAccessible = true
                 return method.invoke(manager) as? Boolean ?: false
             } catch (e: Exception) {
@@ -285,7 +297,8 @@ class MainService : LifecycleService() {
     }
 
     private fun acquireMulticastLock() {
-        val wifi = applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager
+        val wifi =
+            applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager
         if (wifi != null) {
             lock = wifi.createMulticastLock("WarpMDNSLock")
             lock?.setReferenceCounted(true)

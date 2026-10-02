@@ -1,38 +1,13 @@
 package org.perceivers25.warpinator.feature.about
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.plus
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.BugReport
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.Gavel
-import androidx.compose.material.icons.rounded.RateReview
-import androidx.compose.material.icons.rounded.Translate
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialShapes
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MediumFlexibleTopAppBar
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.toShape
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,14 +27,19 @@ import org.perceivers25.warpinator.core.design.shapes.segmentedDynamicShapes
 import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
 import org.perceivers25.warpinator.core.utils.Utils
 
-private const val TRANSLATE_URL = "https://hosted.weblate.org/engage/warpinator-android/"
+private const val TRANSLATE_URL =
+    "https://hosted.weblate.org/engage/warpinator-android/"
 private const val GOOGLE_PLAY_URL =
     "https://play.google.com/store/apps/details?id=org.perceivers25.warpinator"
-private const val SOURCE_URL = "https://github.com/slowscript/warpinator-android"
+private const val SOURCE_URL =
+    "https://github.com/slowscript/warpinator-android"
 private const val ISSUES_URL = "$SOURCE_URL/issues"
 private const val LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.html"
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterial3ExpressiveApi::class,
+)
 @Composable
 fun AboutScreen() {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -73,7 +53,10 @@ fun AboutScreen() {
                 title = { Text(stringResource(R.string.about_title)) },
                 navigationIcon = {
                     IconButton(onClick = { navController?.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                        )
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -121,7 +104,8 @@ fun AboutScreen() {
                             )
                             Text(
                                 text = stringResource(
-                                    id = R.string.version, BuildConfig.VERSION_NAME,
+                                    id = R.string.version,
+                                    BuildConfig.VERSION_NAME,
                                 ),
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.primary,
@@ -158,7 +142,10 @@ fun AboutScreen() {
                         )
                     },
                     trailingContent = {
-                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null)
+                        Icon(
+                            Icons.AutoMirrored.Rounded.OpenInNew,
+                            contentDescription = null,
+                        )
                     },
                 )
                 Spacer(Modifier.height(ListItemDefaults.SegmentedGap))
@@ -268,7 +255,10 @@ fun AboutScreen() {
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Justify,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 24.dp),
+                    modifier = Modifier.padding(
+                        horizontal = 12.dp,
+                        vertical = 24.dp,
+                    ),
                 )
             }
         }

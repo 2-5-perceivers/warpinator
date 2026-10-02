@@ -5,49 +5,16 @@ import android.net.Uri
 import android.view.KeyEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.plus
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Message
-import androidx.compose.material.icons.rounded.ClearAll
-import androidx.compose.material.icons.rounded.Error
-import androidx.compose.material.icons.rounded.Inbox
-import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material.icons.rounded.StarBorder
-import androidx.compose.material.icons.rounded.SyncAlt
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.toAndroidDragEvent
@@ -59,30 +26,17 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.perceivers25.warpinator.*
 import org.perceivers25.warpinator.R
-import org.perceivers25.warpinator.RemoteConnectionError
-import org.perceivers25.warpinator.RemoteState
-import org.perceivers25.warpinator.TransferError
-import org.perceivers25.warpinator.TransferState
 import org.perceivers25.warpinator.core.data.WarpinatorViewModel
-import org.perceivers25.warpinator.core.design.components.DragAndDropUiMode
-import org.perceivers25.warpinator.core.design.components.FileDropTargetIndicator
-import org.perceivers25.warpinator.core.design.components.TooltipIconButton
-import org.perceivers25.warpinator.core.design.components.fileDropTarget
-import org.perceivers25.warpinator.core.design.components.rememberDropTargetState
-import org.perceivers25.warpinator.core.design.components.rememberShortcutLabelText
+import org.perceivers25.warpinator.core.design.components.*
 import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
 import org.perceivers25.warpinator.core.model.ui.RemoteUi
 import org.perceivers25.warpinator.core.model.ui.TransferKindUi
@@ -103,7 +57,8 @@ fun TransfersPane(
     onFavoriteToggle: (String) -> Unit,
     viewModel: WarpinatorViewModel = hiltViewModel(),
 ) {
-    val transfers by viewModel.getTransfers(remote.uuid).collectAsStateWithLifecycle(listOf())
+    val transfers by viewModel.getTransfers(remote.uuid)
+        .collectAsStateWithLifecycle(listOf())
 
     NotificationInhibitor(
         remoteUuid = remote.uuid,
@@ -117,20 +72,55 @@ fun TransfersPane(
         onBack = onBack,
         onOpenMessagesPane = onOpenMessagesPane,
         onFavoriteToggle = onFavoriteToggle,
-        onAcceptTransfer = { transferUuid -> viewModel.acceptTransfer(remote.uuid, transferUuid) },
-        onCancelTransfer = { transferUuid -> viewModel.cancelTransfer(remote.uuid, transferUuid) },
-        onStopTransfer = { transferUuid -> viewModel.stopTransfer(remote.uuid, transferUuid) },
-        onRetryTransfer = { transferUuid -> viewModel.retryTransfer(remote.uuid, transferUuid) },
+        onAcceptTransfer = { transferUuid ->
+            viewModel.acceptTransfer(
+                remote.uuid,
+                transferUuid,
+            )
+        },
+        onCancelTransfer = { transferUuid ->
+            viewModel.cancelTransfer(
+                remote.uuid,
+                transferUuid,
+            )
+        },
+        onStopTransfer = { transferUuid ->
+            viewModel.stopTransfer(
+                remote.uuid,
+                transferUuid,
+            )
+        },
+        onRetryTransfer = { transferUuid ->
+            viewModel.retryTransfer(
+                remote.uuid,
+                transferUuid,
+            )
+        },
         onItemOpen = {},
-        onSendTransferRequest = { uris -> viewModel.sendTransferRequest(remote.uuid, uris) },
-        removeTransfer = { transferUuid -> viewModel.removeTransfer(remote.uuid, transferUuid) },
-        onRemoveFinalStateTransfers = { remoteUuid -> viewModel.removeFinalStateTransfers(remoteUuid) },
+        onSendTransferRequest = { uris ->
+            viewModel.sendTransferRequest(
+                remote.uuid,
+                uris,
+            )
+        },
+        removeTransfer = { transferUuid ->
+            viewModel.removeTransfer(
+                remote.uuid,
+                transferUuid,
+            )
+        },
+        onRemoveFinalStateTransfers = { remoteUuid ->
+            viewModel.removeFinalStateTransfers(remoteUuid)
+        },
         onReconnect = { viewModel.connectRemote(remote.uuid) },
         onMarkAsRead = { viewModel.markTransfersSeen(remote.uuid) },
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterial3ExpressiveApi::class,
+)
 @Composable
 private fun TransferPaneContent(
     remote: RemoteUi,
@@ -173,8 +163,8 @@ private fun TransferPaneContent(
             true
         },
         shouldStartDragAndDrop = shouldStartDragAndDrop@{ event ->
-            val description =
-                event.toAndroidDragEvent().clipDescription ?: return@shouldStartDragAndDrop false
+            val description = event.toAndroidDragEvent().clipDescription
+                ?: return@shouldStartDragAndDrop false
             (0 until description.mimeTypeCount).any { mimeType ->
                 description.getMimeType(mimeType) !in setOf(
                     ClipDescription.MIMETYPE_TEXT_PLAIN,
@@ -301,7 +291,11 @@ private fun TransferPaneContent(
             }
         },
     ) { padding ->
-        var expandedTransferID by rememberSaveable { mutableStateOf<String?>(null) }
+        var expandedTransferID by rememberSaveable {
+            mutableStateOf<String?>(
+                null,
+            )
+        }
 
         val listContentDescription =
             stringResource(R.string.transfers_history_list_content_description)
@@ -372,7 +366,8 @@ private fun TransferPaneContent(
                     transfer = transfer,
                     expanded = expanded,
                     onExpandRequest = {
-                        expandedTransferID = if (expanded) null else transfer.uuid
+                        expandedTransferID =
+                            if (expanded) null else transfer.uuid
                     },
                     onAccept = onAcceptTransfer,
                     onCancel = onCancelTransfer,
@@ -618,7 +613,10 @@ private fun TransfersPanePreview() {
         hostname = "favys-phone",
         ip = "192.168.0.100",
         state = RemoteState.Connected,
-        picture = ProfilePicturePainter.getProfilePicture("1", LocalContext.current),
+        picture = ProfilePicturePainter.getProfilePicture(
+            "1",
+            LocalContext.current,
+        ),
         isFavorite = true,
     )
 

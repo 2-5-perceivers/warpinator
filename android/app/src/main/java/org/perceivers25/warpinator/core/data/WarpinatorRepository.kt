@@ -8,23 +8,9 @@ import androidx.core.net.toUri
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import org.perceivers25.warpinator.Direction
-import org.perceivers25.warpinator.LogLevel
-import org.perceivers25.warpinator.Message
-import org.perceivers25.warpinator.TransferKind
-import org.perceivers25.warpinator.TransferState
-import org.perceivers25.warpinator.UserConfig
-import org.perceivers25.warpinator.WarpEventListener
-import org.perceivers25.warpinator.WarpException
-import org.perceivers25.warpinator.Warpinator
+import org.perceivers25.warpinator.*
 import org.perceivers25.warpinator.core.model.preferences.SavedFavourite
 import org.perceivers25.warpinator.core.model.ui.RemoteUi
 import org.perceivers25.warpinator.core.model.ui.TransferKindUi
@@ -38,8 +24,6 @@ import org.perceivers25.warpinator.core.utils.ProfilePicturePainter
 import org.perceivers25.warpinator.core.utils.Utils
 import org.perceivers25.warpinator.core.utils.checkWillOverwrite
 import org.perceivers25.warpinator.core.utils.messages.NoDownloadDirSet
-import org.perceivers25.warpinator.setTracingSubscriber
-import org.perceivers25.warpinator.setVirtualFilesystem
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -57,8 +41,10 @@ class WarpinatorRepository @Inject constructor(
 
     // States
     private val _remoteListState = MutableStateFlow<List<RemoteUi>>(emptyList())
-    private val _transfersState = ConcurrentHashMap<String, MutableStateFlow<List<TransferUi>>>()
-    private val _messagesState = ConcurrentHashMap<String, MutableStateFlow<List<Message>>>()
+    private val _transfersState =
+        ConcurrentHashMap<String, MutableStateFlow<List<TransferUi>>>()
+    private val _messagesState =
+        ConcurrentHashMap<String, MutableStateFlow<List<Message>>>()
     private val _serviceState = MutableStateFlow<ServiceState>(ServiceState.Ok)
     private val _networkState = MutableStateFlow(NetworkState())
     private val _uiMessages = Channel<UiMessage>(Channel.BUFFERED)
@@ -80,7 +66,8 @@ class WarpinatorRepository @Inject constructor(
 
     fun start() {
         // Render profile picture if any
-        val stream: ByteArrayOutputStream? = prefs.profilePicture?.let { ByteArrayOutputStream() }
+        val stream: ByteArrayOutputStream? =
+            prefs.profilePicture?.let { ByteArrayOutputStream() }
         stream?.use {
             ProfilePicturePainter.getProfilePicture(
                 picture = prefs.profilePicture!!,
@@ -123,7 +110,9 @@ class WarpinatorRepository @Inject constructor(
                                 displayName = remote.displayName,
                                 username = remote.username,
                                 hostname = remote.hostname,
-                                picture = if (remote.picture) server!!.remotePicture(uuid).let {
+                                picture = if (remote.picture) server!!.remotePicture(
+                                    uuid,
+                                ).let {
                                     BitmapFactory.decodeByteArray(
                                         it,
                                         0,
@@ -133,7 +122,9 @@ class WarpinatorRepository @Inject constructor(
                                 pictureVersion = remote.pictureVersion.toByte(),
                                 state = remote.state,
                                 messageSupport = remote.messageSupport,
-                                isFavorite = prefs.favourites.contains(SavedFavourite(uuid)),
+                                isFavorite = prefs.favourites.contains(
+                                    SavedFavourite(uuid),
+                                ),
                             ),
                         )
                     } catch (e: WarpException) {
@@ -152,10 +143,15 @@ class WarpinatorRepository @Inject constructor(
                                 username = remote.username,
                                 hostname = remote.hostname,
                                 state = remote.state,
-                                picture = if (remote.picture) server!!.remotePicture(uuid)
-                                    .let { picture ->
+                                picture = if (remote.picture) server!!.remotePicture(
+                                    uuid,
+                                ).let { picture ->
                                         if (remote.pictureVersion.toByte() != it.pictureVersion) {
-                                            BitmapFactory.decodeByteArray(picture, 0, picture.size)
+                                            BitmapFactory.decodeByteArray(
+                                                picture,
+                                                0,
+                                                picture.size,
+                                            )
                                         } else it.picture
                                     } else null,
                                 pictureVersion = remote.pictureVersion.toByte(),
@@ -172,7 +168,8 @@ class WarpinatorRepository @Inject constructor(
                     transferUuid: String,
                 ) {
                     try {
-                        val transfer = server!!.transfer(remoteUuid, transferUuid)
+                        val transfer =
+                            server!!.transfer(remoteUuid, transferUuid)
 
                         val transferUi = TransferUi(
                             uuid = transfer.uuid,
@@ -211,8 +208,14 @@ class WarpinatorRepository @Inject constructor(
                                 when (prefs.autoAccept) {
                                     AutoAcceptValue.Nobody -> {}
                                     AutoAcceptValue.Favourites -> {
-                                        if (prefs.favourites.contains(SavedFavourite(remoteUuid))) {
-                                            acceptTransfer(remoteUuid, transferUuid)
+                                        if (prefs.favourites.contains(
+                                                SavedFavourite(remoteUuid),
+                                            )
+                                        ) {
+                                            acceptTransfer(
+                                                remoteUuid,
+                                                transferUuid,
+                                            )
                                         }
                                     }
 
@@ -232,7 +235,8 @@ class WarpinatorRepository @Inject constructor(
                     transferUuid: String,
                 ) {
                     try {
-                        val transfer = server!!.transfer(remoteUuid, transferUuid)
+                        val transfer =
+                            server!!.transfer(remoteUuid, transferUuid)
                         addOrUpdateTransfer(
                             remoteUuid,
                             TransferUi(
@@ -261,17 +265,26 @@ class WarpinatorRepository @Inject constructor(
                     remoteUuid: String,
                     transferUuid: String,
                 ) {
-                    _transfersState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }
-                        .update { currentList ->
+                    _transfersState.getOrPut(remoteUuid) {
+                        MutableStateFlow(
+                            emptyList(),
+                        )
+                    }.update { currentList ->
                             currentList.filter { it.uuid != transferUuid }
                         }
                 }
 
-                override suspend fun onMessageAdded(remoteUuid: String, messageUuid: String) {
+                override suspend fun onMessageAdded(
+                    remoteUuid: String,
+                    messageUuid: String,
+                ) {
                     try {
                         val message = server!!.message(remoteUuid, messageUuid)
-                        _messagesState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }
-                            .update { currentList ->
+                        _messagesState.getOrPut(remoteUuid) {
+                            MutableStateFlow(
+                                emptyList(),
+                            )
+                        }.update { currentList ->
                                 val newList = currentList + message
                                 newList
                             }
@@ -289,8 +302,11 @@ class WarpinatorRepository @Inject constructor(
                     remoteUuid: String,
                     messageUuid: String,
                 ) {
-                    _messagesState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }
-                        .update { currentList ->
+                    _messagesState.getOrPut(remoteUuid) {
+                        MutableStateFlow(
+                            emptyList(),
+                        )
+                    }.update { currentList ->
                             currentList.filter { it.uuid != messageUuid }
                         }
                 }
@@ -335,7 +351,8 @@ class WarpinatorRepository @Inject constructor(
     fun addOrUpdateTransfer(remoteUuid: String, newTransfer: TransferUi) {
         _transfersState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }
             .update { currentList ->
-                val index = currentList.indexOfFirst { it.uuid == newTransfer.uuid }
+                val index =
+                    currentList.indexOfFirst { it.uuid == newTransfer.uuid }
                 val newList = if (index != -1) {
                     val oldTransfer = currentList[index]
 
@@ -429,17 +446,20 @@ class WarpinatorRepository @Inject constructor(
     private fun sortRemotes(list: List<RemoteUi>): List<RemoteUi> {
         return list.sortedWith(
             compareByDescending<RemoteUi> { it.isFavorite }.thenBy {
-                it.displayName.takeIf { name -> name.isNotBlank() } ?: it.hostname
+                it.displayName.takeIf { name -> name.isNotBlank() }
+                    ?: it.hostname
             },
         )
     }
 
     fun getTransfersFlow(remoteUuid: String): Flow<List<TransferUi>> {
-        return _transfersState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }.asStateFlow()
+        return _transfersState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }
+            .asStateFlow()
     }
 
     fun getMessagesFlow(remoteUuid: String): Flow<List<Message>> {
-        return _messagesState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }.asStateFlow()
+        return _messagesState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }
+            .asStateFlow()
     }
 
     fun sendTransferRequest(remoteUuid: String, uris: List<String>) {
@@ -466,7 +486,11 @@ class WarpinatorRepository @Inject constructor(
                 return@launch
             }
             try {
-                server?.acceptTransfer(remoteUuid, transferUuid, prefs.downloadDirUri!!)
+                server?.acceptTransfer(
+                    remoteUuid,
+                    transferUuid,
+                    prefs.downloadDirUri!!,
+                )
             } catch (e: WarpException) {
             }
         }
@@ -475,7 +499,11 @@ class WarpinatorRepository @Inject constructor(
     fun acceptTransferTo(remoteUuid: String, transferUuid: String, path: Uri) {
         applicationScope.launch {
             try {
-                server?.acceptTransfer(remoteUuid, transferUuid, path.toString())
+                server?.acceptTransfer(
+                    remoteUuid,
+                    transferUuid,
+                    path.toString(),
+                )
             } catch (e: WarpException) {
             }
         }
@@ -537,7 +565,12 @@ class WarpinatorRepository @Inject constructor(
         val uuids =
             _messagesState.getOrPut(remoteUuid) { MutableStateFlow(emptyList()) }.value.map { it.uuid }
         try {
-            uuids.forEach { messageUuid -> server?.removeMessage(remoteUuid, messageUuid) }
+            uuids.forEach { messageUuid ->
+                server?.removeMessage(
+                    remoteUuid,
+                    messageUuid,
+                )
+            }
         } catch (e: WarpException) {
         }
     }

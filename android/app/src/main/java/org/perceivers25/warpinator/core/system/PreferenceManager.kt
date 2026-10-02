@@ -6,12 +6,7 @@ import android.net.Uri
 import androidx.core.content.edit
 import androidx.preference.PreferenceManager
 import dagger.hilt.android.qualifiers.ApplicationContext
-import org.perceivers25.warpinator.core.model.preferences.RecentRemote
-import org.perceivers25.warpinator.core.model.preferences.SavedFavourite
-import org.perceivers25.warpinator.core.model.preferences.ThemeOptions
-import org.perceivers25.warpinator.core.model.preferences.recentRemotesFromJson
-import org.perceivers25.warpinator.core.model.preferences.savedFavouritesFromJson
-import org.perceivers25.warpinator.core.model.preferences.toJson
+import org.perceivers25.warpinator.core.model.preferences.*
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,7 +18,8 @@ enum class AutoAcceptValue {
 class PreferenceManager @Inject constructor(
     @param:ApplicationContext val context: Context,
 ) {
-    val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+    val prefs: SharedPreferences =
+        PreferenceManager.getDefaultSharedPreferences(context)
 
     var favourites: Set<SavedFavourite> = setOf()
     var recentRemotes: List<RecentRemote> = listOf()
@@ -36,17 +32,21 @@ class PreferenceManager @Inject constructor(
     val autoStop: Boolean get() = prefs.getBoolean(KEY_AUTO_STOP, true)
     val serviceUuid: String? get() = prefs.getString(KEY_UUID, null)
     val displayName: String
-        get() = prefs.getString(KEY_DISPLAY_NAME, DEFAULT_DISPLAY_NAME) ?: DEFAULT_DISPLAY_NAME
-    val port: Int get() = prefs.getString(KEY_PORT, DEFAULT_PORT)?.toIntOrNull() ?: 42000
+        get() = prefs.getString(KEY_DISPLAY_NAME, DEFAULT_DISPLAY_NAME)
+            ?: DEFAULT_DISPLAY_NAME
+    val port: Int
+        get() = prefs.getString(KEY_PORT, DEFAULT_PORT)?.toIntOrNull() ?: 42000
     val authPort: Int
-        get() = prefs.getString(KEY_AUTH_PORT, DEFAULT_AUTH_PORT)?.toIntOrNull() ?: 42001
+        get() = prefs.getString(KEY_AUTH_PORT, DEFAULT_AUTH_PORT)?.toIntOrNull()
+            ?: 42001
     val networkInterface: String
         get() = prefs.getString(
             KEY_NETWORK_INTERFACE,
             "AUTO",
         ) ?: "AUTO"
     val groupCode: String
-        get() = prefs.getString(KEY_GROUP_CODE, DEFAULT_GROUP_CODE) ?: DEFAULT_GROUP_CODE
+        get() = prefs.getString(KEY_GROUP_CODE, DEFAULT_GROUP_CODE)
+            ?: DEFAULT_GROUP_CODE
     val autoAccept: AutoAcceptValue
         get() = AutoAcceptValue.entries.getOrNull(
             prefs.getInt(
@@ -54,16 +54,30 @@ class PreferenceManager @Inject constructor(
                 0,
             ),
         ) ?: AutoAcceptValue.Nobody
-    val useCompression: Boolean get() = prefs.getBoolean(KEY_USE_COMPRESSION, false)
-    val notifyIncoming: Boolean get() = prefs.getBoolean(KEY_NOTIFY_INCOMING, true)
+    val useCompression: Boolean
+        get() = prefs.getBoolean(
+            KEY_USE_COMPRESSION,
+            false,
+        )
+    val notifyIncoming: Boolean
+        get() = prefs.getBoolean(
+            KEY_NOTIFY_INCOMING,
+            true,
+        )
     val downloadDirUri: String? get() = prefs.getString(KEY_DOWNLOAD_DIR, null)
     val profilePicture: String?
         get() = prefs.getString(
             KEY_PROFILE_PICTURE,
             DEFAULT_PROFILE_PICTURE,
         )
-    val theme: String get() = prefs.getString(KEY_THEME, VAL_THEME_DEFAULT) ?: VAL_THEME_DEFAULT
-    val dynamicColors: Boolean get() = prefs.getBoolean(KEY_DYNAMIC_COLORS, true)
+    val theme: String
+        get() = prefs.getString(KEY_THEME, VAL_THEME_DEFAULT)
+            ?: VAL_THEME_DEFAULT
+    val dynamicColors: Boolean
+        get() = prefs.getBoolean(
+            KEY_DYNAMIC_COLORS,
+            true,
+        )
 
     init {
         loadSettings()
@@ -72,7 +86,12 @@ class PreferenceManager @Inject constructor(
     fun loadSettings() {
         // Ensure defaults exist
         if (!prefs.contains(KEY_PROFILE_PICTURE)) {
-            prefs.edit { putString(KEY_PROFILE_PICTURE, DEFAULT_PROFILE_PICTURE) }
+            prefs.edit {
+                putString(
+                    KEY_PROFILE_PICTURE,
+                    DEFAULT_PROFILE_PICTURE,
+                )
+            }
         }
 
         // Load Complex Data
@@ -151,38 +170,49 @@ class PreferenceManager @Inject constructor(
 
     fun saveServiceUuid(uuid: String) = prefs.edit { putString(KEY_UUID, uuid) }
 
-    fun setDisplayName(value: String) = prefs.edit { putString(KEY_DISPLAY_NAME, value) }
+    fun setDisplayName(value: String) =
+        prefs.edit { putString(KEY_DISPLAY_NAME, value) }
 
-    fun setGroupCode(value: String) = prefs.edit { putString(KEY_GROUP_CODE, value) }
+    fun setGroupCode(value: String) =
+        prefs.edit { putString(KEY_GROUP_CODE, value) }
 
     fun setServerPort(value: String) = prefs.edit { putString(KEY_PORT, value) }
 
-    fun setAuthPort(value: String) = prefs.edit { putString(KEY_AUTH_PORT, value) }
+    fun setAuthPort(value: String) =
+        prefs.edit { putString(KEY_AUTH_PORT, value) }
 
-    fun setNetworkInterface(value: String) = prefs.edit { putString(KEY_NETWORK_INTERFACE, value) }
+    fun setNetworkInterface(value: String) =
+        prefs.edit { putString(KEY_NETWORK_INTERFACE, value) }
 
-    fun setNotifyIncoming(value: Boolean) = prefs.edit { putBoolean(KEY_NOTIFY_INCOMING, value) }
+    fun setNotifyIncoming(value: Boolean) =
+        prefs.edit { putBoolean(KEY_NOTIFY_INCOMING, value) }
 
     fun setAutoAccept(value: AutoAcceptValue) =
         prefs.edit { putInt(KEY_AUTO_ACCEPT, value.ordinal) }
 
-    fun setUseCompression(value: Boolean) = prefs.edit { putBoolean(KEY_USE_COMPRESSION, value) }
+    fun setUseCompression(value: Boolean) =
+        prefs.edit { putBoolean(KEY_USE_COMPRESSION, value) }
 
-    fun setAutoStop(value: Boolean) = prefs.edit { putBoolean(KEY_AUTO_STOP, value) }
+    fun setAutoStop(value: Boolean) =
+        prefs.edit { putBoolean(KEY_AUTO_STOP, value) }
 
-    fun setDebugLog(value: Boolean) = prefs.edit { putBoolean(KEY_DEBUG_LOG, value) }
+    fun setDebugLog(value: Boolean) =
+        prefs.edit { putBoolean(KEY_DEBUG_LOG, value) }
 
-    fun setDirectory(uri: Uri) = prefs.edit { putString(KEY_DOWNLOAD_DIR, uri.toString()) }
+    fun setDirectory(uri: Uri) =
+        prefs.edit { putString(KEY_DOWNLOAD_DIR, uri.toString()) }
 
     fun resetDirectory() = prefs.edit { remove(KEY_DOWNLOAD_DIR) }
 
-    fun setProfilePictureKey(key: String) = prefs.edit { putString(KEY_PROFILE_PICTURE, key) }
+    fun setProfilePictureKey(key: String) =
+        prefs.edit { putString(KEY_PROFILE_PICTURE, key) }
 
     fun setTheme(value: ThemeOptions) {
         prefs.edit { putString(KEY_THEME, value.key) }
     }
 
-    fun setDynamicColors(value: Boolean) = prefs.edit { putBoolean(KEY_DYNAMIC_COLORS, value) }
+    fun setDynamicColors(value: Boolean) =
+        prefs.edit { putBoolean(KEY_DYNAMIC_COLORS, value) }
 
     companion object {
         const val KEY_UUID = "uuid"

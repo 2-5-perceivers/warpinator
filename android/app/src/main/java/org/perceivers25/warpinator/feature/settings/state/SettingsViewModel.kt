@@ -88,13 +88,17 @@ class SettingsViewModel @Inject constructor(
         }
 
     init {
-        preferenceManager.prefs.registerOnSharedPreferenceChangeListener(preferenceChangeListener)
+        preferenceManager.prefs.registerOnSharedPreferenceChangeListener(
+            preferenceChangeListener,
+        )
         loadSettings()
         loadInterfaces()
     }
 
     override fun onCleared() {
-        preferenceManager.prefs.unregisterOnSharedPreferenceChangeListener(preferenceChangeListener)
+        preferenceManager.prefs.unregisterOnSharedPreferenceChangeListener(
+            preferenceChangeListener,
+        )
         super.onCleared()
     }
 
@@ -223,8 +227,8 @@ class SettingsViewModel @Inject constructor(
 
     private fun loadInterfaces() {
         viewModelScope.launch(Dispatchers.IO) {
-            val networkInterfaceNames =
-                Utils.networkInterfaces ?: arrayOf("Failed to get network interfaces")
+            val networkInterfaceNames = Utils.networkInterfaces
+                ?: arrayOf("Failed to get network interfaces")
             val interfaceDropdownEntries = mutableListOf<Pair<String, String>>()
 
             interfaceDropdownEntries.add("Auto" to PreferenceManager.DEFAULT_NETWORK_INTERFACE)
@@ -249,34 +253,41 @@ class SettingsViewModel @Inject constructor(
     fun handleCustomProfilePicture(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                application.contentResolver.openInputStream(uri)?.use { inputStream ->
-                    val originalBitmap = BitmapFactory.decodeStream(inputStream) ?: return@use
+                application.contentResolver.openInputStream(uri)
+                    ?.use { inputStream ->
+                        val originalBitmap =
+                            BitmapFactory.decodeStream(inputStream)
+                                ?: return@use
 
-                    val maxDimension = 512
-                    val (outW, outH) = if (originalBitmap.width > originalBitmap.height) {
-                        maxDimension to (originalBitmap.height * maxDimension) / originalBitmap.width
-                    } else {
-                        (originalBitmap.width * maxDimension) / originalBitmap.height to maxDimension
+                        val maxDimension = 512
+                        val (outW, outH) = if (originalBitmap.width > originalBitmap.height) {
+                            maxDimension to (originalBitmap.height * maxDimension) / originalBitmap.width
+                        } else {
+                            (originalBitmap.width * maxDimension) / originalBitmap.height to maxDimension
+                        }
+
+                        // Create scaled bitmap
+                        val scaledBitmap = originalBitmap.scale(outW, outH)
+
+                        // Save to internal storage
+                        application.openFileOutput(
+                            PreferenceManager.FILE_PROFILE_PIC,
+                            Context.MODE_PRIVATE,
+                        ).use { os ->
+                            scaledBitmap.compress(
+                                Bitmap.CompressFormat.PNG,
+                                100,
+                                os,
+                            )
+                        }
+
+                        _uiState.update {
+                            it.copy(
+                                // Update timestamp to force reload
+                                profileImageSignature = System.currentTimeMillis(),
+                            )
+                        }
                     }
-
-                    // Create scaled bitmap
-                    val scaledBitmap = originalBitmap.scale(outW, outH)
-
-                    // Save to internal storage
-                    application.openFileOutput(
-                        PreferenceManager.FILE_PROFILE_PIC,
-                        Context.MODE_PRIVATE,
-                    ).use { os ->
-                        scaledBitmap.compress(Bitmap.CompressFormat.PNG, 100, os)
-                    }
-
-                    _uiState.update {
-                        it.copy(
-                            // Update timestamp to force reload
-                            profileImageSignature = System.currentTimeMillis(),
-                        )
-                    }
-                }
             } catch (e: Exception) {
                 e.printStackTrace()
                 viewModelScope.launch {

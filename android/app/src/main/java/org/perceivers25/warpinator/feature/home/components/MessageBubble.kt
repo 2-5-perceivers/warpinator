@@ -7,28 +7,14 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.ripple
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,7 +64,8 @@ fun MessageBubble(message: Message, onDeleteMessage: () -> Unit = {}) {
         if (isSent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
     val accentColor =
         if (isSent) MaterialTheme.colorScheme.onTertiary else MaterialTheme.colorScheme.primary
-    val overlayColor = if (isSent) MaterialTheme.colorScheme.surfaceContainerLowest else textColor
+    val overlayColor =
+        if (isSent) MaterialTheme.colorScheme.surfaceContainerLowest else textColor
     val bubbleShape = if (isSent) {
         RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
     } else {
@@ -86,10 +73,12 @@ fun MessageBubble(message: Message, onDeleteMessage: () -> Unit = {}) {
     }
 
     val timeString = remember(message.timestamp) {
-        DateFormat.getTimeFormat(context).format(Date(message.timestamp.toLong()))
+        DateFormat.getTimeFormat(context)
+            .format(Date(message.timestamp.toLong()))
     }
 
-    val annotatedMessage = rememberAnnotatedLinkText(message.content, accentColor)
+    val annotatedMessage =
+        rememberAnnotatedLinkText(message.content, accentColor)
 
     Box(
         modifier = Modifier
@@ -142,7 +131,12 @@ fun MessageBubble(message: Message, onDeleteMessage: () -> Unit = {}) {
                     ),
                 ),
         ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+            Column(
+                modifier = Modifier.padding(
+                    horizontal = 16.dp,
+                    vertical = 10.dp,
+                ),
+            ) {
                 val messageContentDescription = if (isSent) stringResource(
                     R.string.sent_message_content_description,
                     message.content,
@@ -154,7 +148,10 @@ fun MessageBubble(message: Message, onDeleteMessage: () -> Unit = {}) {
                 val timestampContentDescription = if (isSent) stringResource(
                     R.string.sent_at_content_description,
                     timeString,
-                ) else stringResource(R.string.received_at_content_description, timeString)
+                ) else stringResource(
+                    R.string.received_at_content_description,
+                    timeString,
+                )
 
                 Text(
                     text = annotatedMessage,
@@ -200,8 +197,10 @@ fun MessageBubble(message: Message, onDeleteMessage: () -> Unit = {}) {
                                 leadingIcon = Icons.Rounded.ContentCopy,
                                 onClick = {
                                     coroutineScope.launch {
-                                        val clipData =
-                                            ClipData.newPlainText("Message", message.content)
+                                        val clipData = ClipData.newPlainText(
+                                            "Message",
+                                            message.content,
+                                        )
                                         clipboard.setClipEntry(clipData.toClipEntry())
                                     }
                                     showMenu = false
@@ -211,11 +210,16 @@ fun MessageBubble(message: Message, onDeleteMessage: () -> Unit = {}) {
                                 title = stringResource(R.string.share_label),
                                 leadingIcon = Icons.Rounded.Share,
                                 onClick = {
-                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                                        putExtra(Intent.EXTRA_TEXT, message.content)
-                                        type = "text/plain"
-                                    }
-                                    val shareIntent = Intent.createChooser(sendIntent, null)
+                                    val sendIntent =
+                                        Intent(Intent.ACTION_SEND).apply {
+                                            putExtra(
+                                                Intent.EXTRA_TEXT,
+                                                message.content,
+                                            )
+                                            type = "text/plain"
+                                        }
+                                    val shareIntent =
+                                        Intent.createChooser(sendIntent, null)
                                     context.startActivity(shareIntent)
                                     showMenu = false
                                 },

@@ -6,18 +6,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.*
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 
 @Composable
-fun rememberAnnotatedLinkText(text: String, accentColor: Color): AnnotatedString {
+fun rememberAnnotatedLinkText(
+    text: String,
+    accentColor: Color,
+): AnnotatedString {
     val context = LocalContext.current
     val configuration = LocalWindowInfo.current.containerDpSize
     val isLargeScreen = configuration.width >= 600.dp

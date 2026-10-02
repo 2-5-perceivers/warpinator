@@ -3,13 +3,8 @@ package org.perceivers25.warpinator.app
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.ComponentActivity
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.IntentCompat
 import androidx.core.util.Consumer
@@ -46,7 +41,11 @@ fun WarpinatorIntentHandler(
                 val data = intent.data
                 if (data != null && data.scheme == "warpinator") {
                     val address = data.schemeSpecificPart.removePrefix("//")
-                    if (ProtocolAddressInputValidator.isValidIp(address, false)) {
+                    if (ProtocolAddressInputValidator.isValidIp(
+                            address,
+                            false,
+                        )
+                    ) {
                         connectAddress = address
                         showConnectDialog = true
                     }
@@ -54,8 +53,11 @@ fun WarpinatorIntentHandler(
             }
 
             Intent.ACTION_SEND -> {
-                val uri =
-                    IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+                val uri = IntentCompat.getParcelableExtra(
+                    intent,
+                    Intent.EXTRA_STREAM,
+                    Uri::class.java,
+                )
                 if (uri != null) {
                     sharedUris = listOf(uri)
                     showShareDialog = true

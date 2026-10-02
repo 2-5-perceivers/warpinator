@@ -20,24 +20,29 @@ class ThemeViewModel @Inject constructor(
     private val _dynamicColors = mutableStateOf(preferenceManager.dynamicColors)
     val dynamicColors: State<Boolean> = _dynamicColors
 
-    private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        when (key) {
-            PreferenceManager.KEY_THEME -> {
-                _theme.value = preferenceManager.theme
-            }
+    private val preferenceListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                PreferenceManager.KEY_THEME -> {
+                    _theme.value = preferenceManager.theme
+                }
 
-            PreferenceManager.KEY_DYNAMIC_COLORS -> {
-                _dynamicColors.value = preferenceManager.dynamicColors
+                PreferenceManager.KEY_DYNAMIC_COLORS -> {
+                    _dynamicColors.value = preferenceManager.dynamicColors
+                }
             }
         }
-    }
 
     init {
-        preferenceManager.prefs.registerOnSharedPreferenceChangeListener(preferenceListener)
+        preferenceManager.prefs.registerOnSharedPreferenceChangeListener(
+            preferenceListener,
+        )
     }
 
     override fun onCleared() {
         super.onCleared()
-        preferenceManager.prefs.unregisterOnSharedPreferenceChangeListener(preferenceListener)
+        preferenceManager.prefs.unregisterOnSharedPreferenceChangeListener(
+            preferenceListener,
+        )
     }
 }

@@ -4,52 +4,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Clear
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.Upload
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LinearWavyProgressIndicator
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxState
-import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -105,79 +66,86 @@ fun TransferListItem(
         }
     }
 
-    val deleteTransferActionLabel = stringResource(R.string.delete_transfer_action)
-    val acceptTransferActionLabel = stringResource(R.string.accept_transfer_action)
-    val declineTransferActionLabel = stringResource(R.string.decline_transfer_action)
+    val deleteTransferActionLabel =
+        stringResource(R.string.delete_transfer_action)
+    val acceptTransferActionLabel =
+        stringResource(R.string.accept_transfer_action)
+    val declineTransferActionLabel =
+        stringResource(R.string.decline_transfer_action)
     val stopTransferActionLabel = stringResource(R.string.stop_transfer_action)
-    val cancelTransferActionLabel = stringResource(R.string.cancel_transfer_action)
-    val retryTransferActionLabel = stringResource(R.string.retry_transfer_action)
-    val openTransferActionLabel = stringResource(R.string.open_transfer_item_action)
+    val cancelTransferActionLabel =
+        stringResource(R.string.cancel_transfer_action)
+    val retryTransferActionLabel =
+        stringResource(R.string.retry_transfer_action)
+    val openTransferActionLabel =
+        stringResource(R.string.open_transfer_item_action)
 
-    val semanticCustomActions = remember(uiState.actionButtons, uiState.allowDismiss) {
-        buildList {
-            if (uiState.allowDismiss) add(
-                CustomAccessibilityAction(deleteTransferActionLabel) {
-                    onDelete()
-                    true
-                },
-            )
+    val semanticCustomActions =
+        remember(uiState.actionButtons, uiState.allowDismiss) {
+            buildList {
+                if (uiState.allowDismiss) add(
+                    CustomAccessibilityAction(deleteTransferActionLabel) {
+                        onDelete()
+                        true
+                    },
+                )
 
-            when (uiState.actionButtons) {
-                TransferUiActionButtons.AcceptAndDecline -> {
-                    add(
-                        CustomAccessibilityAction(acceptTransferActionLabel) {
-                            onAccept(transfer.uuid)
-                            true
-                        },
-                    )
-                    add(
-                        CustomAccessibilityAction(declineTransferActionLabel) {
-                            onCancel(transfer.uuid)
-                            true
-                        },
-                    )
+                when (uiState.actionButtons) {
+                    TransferUiActionButtons.AcceptAndDecline -> {
+                        add(
+                            CustomAccessibilityAction(acceptTransferActionLabel) {
+                                onAccept(transfer.uuid)
+                                true
+                            },
+                        )
+                        add(
+                            CustomAccessibilityAction(declineTransferActionLabel) {
+                                onCancel(transfer.uuid)
+                                true
+                            },
+                        )
+                    }
+
+                    TransferUiActionButtons.Stop -> {
+                        add(
+                            CustomAccessibilityAction(stopTransferActionLabel) {
+                                onStop(transfer.uuid)
+                                true
+                            },
+                        )
+                    }
+
+                    TransferUiActionButtons.Cancel -> {
+                        add(
+                            CustomAccessibilityAction(cancelTransferActionLabel) {
+                                onStop(transfer.uuid)
+                                true
+                            },
+                        )
+                    }
+
+                    TransferUiActionButtons.Retry -> {
+                        add(
+                            CustomAccessibilityAction(retryTransferActionLabel) {
+                                onRetry(transfer.uuid)
+                                true
+                            },
+                        )
+                    }
+
+                    TransferUiActionButtons.OpenFolder -> {
+                        add(
+                            CustomAccessibilityAction(openTransferActionLabel) {
+                                onItemOpen(transfer.uuid)
+                                true
+                            },
+                        )
+                    }
+
+                    TransferUiActionButtons.None -> {}
                 }
-
-                TransferUiActionButtons.Stop -> {
-                    add(
-                        CustomAccessibilityAction(stopTransferActionLabel) {
-                            onStop(transfer.uuid)
-                            true
-                        },
-                    )
-                }
-
-                TransferUiActionButtons.Cancel -> {
-                    add(
-                        CustomAccessibilityAction(cancelTransferActionLabel) {
-                            onStop(transfer.uuid)
-                            true
-                        },
-                    )
-                }
-
-                TransferUiActionButtons.Retry -> {
-                    add(
-                        CustomAccessibilityAction(retryTransferActionLabel) {
-                            onRetry(transfer.uuid)
-                            true
-                        },
-                    )
-                }
-
-                TransferUiActionButtons.OpenFolder -> {
-                    add(
-                        CustomAccessibilityAction(openTransferActionLabel) {
-                            onItemOpen(transfer.uuid)
-                            true
-                        },
-                    )
-                }
-
-                TransferUiActionButtons.None -> {}
             }
         }
-    }
 
     val tileInteractionSource = remember { MutableInteractionSource() }
     val clearInteractionSource = remember { MutableInteractionSource() }
@@ -187,7 +155,8 @@ fun TransferListItem(
     val isButtonHovered by clearInteractionSource.collectIsHoveredAsState()
     val isButtonPressed by clearInteractionSource.collectIsPressedAsState()
 
-    val showClearAction = isTileHovered || isTileFocused || isButtonHovered || isButtonPressed
+    val showClearAction =
+        isTileHovered || isTileFocused || isButtonHovered || isButtonPressed
 
 
     SwipeToDismissBox(
@@ -222,13 +191,17 @@ fun TransferListItem(
                 },
                 supportingContent = {
                     Text(
-                        text = uiState.statusText, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        text = uiState.statusText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 },
                 leadingContent = {
                     Icon(
                         imageVector = if (uiState.isSending) Icons.Rounded.Upload else Icons.Rounded.Download,
-                        contentDescription = if (uiState.isSending) stringResource(R.string.transfer_direction_send_short) else stringResource(
+                        contentDescription = if (uiState.isSending) stringResource(
+                            R.string.transfer_direction_send_short,
+                        ) else stringResource(
                             R.string.transfer_direction_receive_short,
                         ),
                         tint = uiState.iconColor,
@@ -309,13 +282,17 @@ fun TransferListItem(
                                 ListItem(
                                     headlineContent = {
                                         Text(
-                                            if (uiState.isSending) stringResource(R.string.outgoing_transfer) else stringResource(
+                                            if (uiState.isSending) stringResource(
+                                                R.string.outgoing_transfer,
+                                            ) else stringResource(
                                                 R.string.incoming_transfer,
                                             ),
                                         )
                                     },
                                     supportingContent = { Text(uiState.statusLongText) },
-                                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                    colors = ListItemDefaults.colors(
+                                        containerColor = Color.Transparent,
+                                    ),
                                 )
 
                                 when (uiState.progressIndicator) {
@@ -365,7 +342,9 @@ fun TransferListItem(
                                             Icon(
                                                 Icons.Rounded.Check,
                                                 contentDescription = null,
-                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                                modifier = Modifier.size(
+                                                    ButtonDefaults.IconSize,
+                                                ),
                                             )
                                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                                             Text(stringResource(R.string.accept_label))
@@ -382,7 +361,9 @@ fun TransferListItem(
                                             Icon(
                                                 Icons.Rounded.Close,
                                                 contentDescription = null,
-                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                                modifier = Modifier.size(
+                                                    ButtonDefaults.IconSize,
+                                                ),
                                             )
                                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                                             Text(stringResource(R.string.decline_label))
@@ -401,7 +382,9 @@ fun TransferListItem(
                                             Icon(
                                                 Icons.Rounded.Stop,
                                                 contentDescription = null,
-                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                                modifier = Modifier.size(
+                                                    ButtonDefaults.IconSize,
+                                                ),
                                             )
                                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                                             Text(stringResource(R.string.stop_label))
@@ -416,7 +399,9 @@ fun TransferListItem(
                                             Icon(
                                                 Icons.Rounded.Refresh,
                                                 contentDescription = null,
-                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                                modifier = Modifier.size(
+                                                    ButtonDefaults.IconSize,
+                                                ),
                                             )
                                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                                             Text(stringResource(R.string.retry_label))
@@ -431,7 +416,9 @@ fun TransferListItem(
                                             Icon(
                                                 Icons.Rounded.FolderOpen,
                                                 contentDescription = null,
-                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                                modifier = Modifier.size(
+                                                    ButtonDefaults.IconSize,
+                                                ),
                                             )
                                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                                             Text(stringResource(R.string.open_item_label))
@@ -450,7 +437,9 @@ fun TransferListItem(
                                             Icon(
                                                 Icons.Rounded.Close,
                                                 contentDescription = null,
-                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                                modifier = Modifier.size(
+                                                    ButtonDefaults.IconSize,
+                                                ),
                                             )
                                             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
                                             Text(stringResource(R.string.cancel_label))
@@ -571,7 +560,9 @@ fun TransferListItemPreview() {
                     TransferListItem(
                         transfer = incoming,
                         expanded = expandedId == "1",
-                        onExpandRequest = { expandedId = if (expandedId == "1") null else "1" },
+                        onExpandRequest = {
+                            expandedId = if (expandedId == "1") null else "1"
+                        },
                         itemIndex = 0,
                         itemListCount = 3,
                     )
@@ -582,7 +573,9 @@ fun TransferListItemPreview() {
                     TransferListItem(
                         transfer = outgoing,
                         expanded = expandedId == "2",
-                        onExpandRequest = { expandedId = if (expandedId == "2") null else "2" },
+                        onExpandRequest = {
+                            expandedId = if (expandedId == "2") null else "2"
+                        },
                         itemIndex = 1,
                         itemListCount = 3,
                     )
@@ -592,7 +585,9 @@ fun TransferListItemPreview() {
                     TransferListItem(
                         transfer = finished,
                         expanded = expandedId == "3",
-                        onExpandRequest = { expandedId = if (expandedId == "3") null else "3" },
+                        onExpandRequest = {
+                            expandedId = if (expandedId == "3") null else "3"
+                        },
                         itemIndex = 2,
                         itemListCount = 3,
                     )

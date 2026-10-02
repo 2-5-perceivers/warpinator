@@ -1,14 +1,6 @@
 package org.perceivers25.warpinator.feature.home.panes
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.plus
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -16,33 +8,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -73,7 +45,8 @@ fun MessagesPane(
     onBack: () -> Unit,
     viewModel: WarpinatorViewModel = hiltViewModel(),
 ) {
-    val messages by viewModel.getMessages(remote.uuid).collectAsStateWithLifecycle(listOf())
+    val messages by viewModel.getMessages(remote.uuid)
+        .collectAsStateWithLifecycle(listOf())
 
     NotificationInhibitor(
         remoteUuid = remote.uuid,
@@ -85,13 +58,26 @@ fun MessagesPane(
         messages = messages.reversed(),
         paneMode = paneMode,
         onBack = onBack,
-        onSendMessage = { message -> viewModel.sendMessage(remote.uuid, message) },
+        onSendMessage = { message ->
+            viewModel.sendMessage(
+                remote.uuid,
+                message,
+            )
+        },
         onMarkAsRead = { viewModel.markMessagesSeen(remote.uuid) },
-        onDeleteMessage = { uuid -> viewModel.removeMessage(remote.uuid, uuid) },
+        onDeleteMessage = { uuid ->
+            viewModel.removeMessage(
+                remote.uuid,
+                uuid,
+            )
+        },
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterial3ExpressiveApi::class,
+)
 @Composable
 private fun MessagesPaneContent(
     remote: RemoteUi,
@@ -126,7 +112,9 @@ private fun MessagesPaneContent(
         topBar = {
             TopAppBar(
                 title = {
-                    if (paneMode) Text(stringResource(R.string.messages)) else Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (paneMode) Text(stringResource(R.string.messages)) else Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         DynamicAvatarCircle(
                             bitmap = remote.picture,
                             isFavorite = remote.isFavorite,
@@ -134,13 +122,19 @@ private fun MessagesPaneContent(
                             isLoading = isConnecting,
                             isDisabled = isDisconnected,
                         )
-                        Text(titleFormat.title, modifier = Modifier.padding(8.dp, 0.dp))
+                        Text(
+                            titleFormat.title,
+                            modifier = Modifier.padding(8.dp, 0.dp),
+                        )
                     }
                 },
                 navigationIcon = {
                     if (!paneMode) {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                            Icon(
+                                Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = "Back",
+                            )
                         }
                     }
                 },
@@ -158,15 +152,20 @@ private fun MessagesPaneContent(
                 .consumeWindowInsets(innerPadding)
                 .imePadding(),
         ) {
-            val listContentDescription =
-                stringResource(R.string.message_history_with_content_description, titleFormat.title)
+            val listContentDescription = stringResource(
+                R.string.message_history_with_content_description,
+                titleFormat.title,
+            )
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .semantics {
                         contentDescription = listContentDescription
                     },
-                contentPadding = innerPadding + PaddingValues(bottom = 92.dp, top = 8.dp),
+                contentPadding = innerPadding + PaddingValues(
+                    bottom = 92.dp,
+                    top = 8.dp,
+                ),
                 reverseLayout = true,
                 state = listState,
             ) {
@@ -193,7 +192,10 @@ private fun MessagesPaneContent(
                 tonalElevation = 2.dp,
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(
+                        horizontal = 8.dp,
+                        vertical = 4.dp,
+                    ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val sendingEnabled =
@@ -230,10 +232,14 @@ private fun MessagesPaneContent(
                         maxLines = 3,
                     )
 
-                    val sendButtonClickLabel = stringResource(R.string.send_action)
+                    val sendButtonClickLabel =
+                        stringResource(R.string.send_action)
                     val sendButtonStateDescription = when {
                         !remote.messageSupport -> stringResource(R.string.device_does_not_support_text_messages_state)
-                        remote.state != RemoteState.Connected -> stringResource(R.string.device_is_disconnected_state)
+                        remote.state != RemoteState.Connected -> stringResource(
+                            R.string.device_is_disconnected_state,
+                        )
+
                         messageText.isBlank() -> stringResource(R.string.message_is_empty_state)
                         else -> ""
                     }
@@ -393,7 +399,10 @@ private fun MessagesPanePreview() {
         hostname = "favys-phone",
         ip = "192.168.0.100",
         state = RemoteState.Connected,
-        picture = ProfilePicturePainter.getProfilePicture("1", LocalContext.current),
+        picture = ProfilePicturePainter.getProfilePicture(
+            "1",
+            LocalContext.current,
+        ),
         isFavorite = true,
     )
 
