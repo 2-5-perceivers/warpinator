@@ -40,7 +40,7 @@ class WarpinatorViewModel @Inject constructor(
 
     val address: String
         get() {
-            return "null:null" // TODO: store authPort in repository
+            return "${repository.currentIPStr}:${preferenceManager.authPort}"
         }
 
     val uiMessages = repository.uiMessages

@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.provider.DocumentsContract
@@ -13,10 +14,8 @@ import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
 import androidx.core.net.toUri
-import java.net.Inet4Address
-import java.net.NetworkInterface
-import java.net.SocketException
-import java.net.URLDecoder
+import org.perceivers25.warpinator.core.system.PreferenceManager
+import java.net.*
 import java.util.Collections
 import java.util.Random
 
@@ -41,6 +40,70 @@ object Utils {
             name = "Android Phone"
         }
         return name
+    }
+
+    fun iPAddress(context: Context, networkInterface: String?): IPInfo? {
+        networkInterface ?: return null
+        try {
+            if (networkInterface.isNotEmpty() && networkInterface != PreferenceManager.DEFAULT_NETWORK_INTERFACE) {
+                val ia = getIPForIfaceName(networkInterface)
+                if (ia != null) return ia
+            }
+            var ip = networkIP(context)
+            if (ip == null) ip = wifiIP(context)
+            if (ip == null) ip = getIPForIfaceName(wifiInterface)
+            if (ip == null) {
+                val activeNi = activeIface
+                if (activeNi != null) ip = getIPForIface(activeNi)
+            }
+            return ip
+        } catch (_: Exception) {
+            return null
+        }
+    }
+
+    @SuppressLint("WifiManagerPotentialLeak")
+    fun wifiIP(context: Context): IPInfo? {
+        val wifiManager =
+            context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                ?: return null
+        val ip = wifiManager.connectionInfo.ipAddress
+        if (ip == 0) return null
+        return try {
+            val bytes = byteArrayOf(
+                (ip and 0xff).toByte(),
+                ((ip shr 8) and 0xff).toByte(),
+                ((ip shr 16) and 0xff).toByte(),
+                ((ip shr 24) and 0xff).toByte(),
+            )
+            IPInfo(InetAddress.getByAddress(bytes) as Inet4Address, 24)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun networkIP(context: Context): IPInfo? {
+        val connMgr =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return null
+        val activeNetwork = connMgr.activeNetwork ?: return null
+        val networkCaps =
+            connMgr.getNetworkCapabilities(activeNetwork) ?: return null
+        val properties = connMgr.getLinkProperties(activeNetwork) ?: return null
+        if (networkCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) && (networkCaps.hasTransport(
+                NetworkCapabilities.TRANSPORT_WIFI,
+            ) || networkCaps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+        ) {
+            for (addr in properties.linkAddresses) {
+                if (addr.address is Inet4Address) {
+                    return IPInfo(
+                        addr.address as Inet4Address,
+                        addr.prefixLength,
+                    )
+                }
+            }
+        }
+        return null
     }
 
     @get:Throws(SocketException::class)

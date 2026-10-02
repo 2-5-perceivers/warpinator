@@ -69,8 +69,8 @@ class MainService : LifecycleService() {
         // Acquire multicast lock for mDNS
         acquireMulticastLock()
 
-        // Server needs to load interface setting before this
-        // repository.currentIPInfo = Utils.iPAddress(this, server.get().networkInterface) // TODO: man fix this
+        repository.currentIPInfo =
+            Utils.iPAddress(this, repository.prefs.networkInterface)
         Log.d(TAG, Utils.dumpInterfaces() ?: "No interfaces")
 
         // Sometimes fails. Maybe takes too long to get here?
@@ -262,38 +262,24 @@ class MainService : LifecycleService() {
     fun gotNetwork() = repository.networkState.value.isOnline
 
     private fun onNetworkLost() {
-        // if (!gotNetwork()) repository.currentIPInfo =
-        //     null // Rebind even if we reconnected to the same net
+        if (!gotNetwork()) repository.currentIPInfo = null
     }
 
     private fun onNetworkChanged() {
-        // val newInfo = Utils.iPAddress(this, server.get().networkInterface)
-        // if (newInfo == null) {
-        //     Log.w(TAG, "Network changed, but we do not have an IP")
-        //     repository.currentIPInfo = null
-        //     return
-        // }
-        //
-        // val newIP = newInfo.address
-        // val oldIP = repository.currentIPInfo?.address
-        //
-        // if (newIP != oldIP) {
-        //     Log.d(TAG, ":: Restarting. New IP: $newIP")
-        //     repository.updateServiceState(ServiceState.NetworkChangeRestart)
-        //     repository.currentIPInfo = newInfo
-        //
-        //
-        //     // Restart server
-        //     lifecycleScope.launch {
-        //         server.get().stop()
-        //
-        //         if (authenticator.certException == null) {
-        //             server.start()
-        //         } else {
-        //             Log.w(TAG, "No cert. Server not started.")
-        //         }
-        //     }
-        // }
+        val newInfo = Utils.iPAddress(this, repository.prefs.networkInterface)
+        if (newInfo == null) {
+            repository.currentIPInfo = null
+            return
+        }
+
+        val newIP = newInfo.address
+        val oldIP = repository.currentIPInfo?.address
+
+        if (newIP != oldIP) {
+            repository.updateServiceState(ServiceState.Restart)
+            repository.currentIPInfo = newInfo
+            repository.restart()
+        }
     }
 
     private fun acquireMulticastLock() {

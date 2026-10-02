@@ -58,6 +58,13 @@ class WarpinatorRepository @Inject constructor(
 
     val prefs = PreferenceManager(appContext)
 
+    var currentIPInfo: Utils.IPInfo? = null
+    val currentIPStr: String?
+        get() = (currentIPInfo ?: Utils.iPAddress(
+            appContext,
+            prefs.networkInterface,
+        ))?.address?.hostAddress
+
     init {
         prefs.loadSettings()
         setTracingSubscriber("WarpinatorLib", LogLevel.DEBUG)
@@ -77,10 +84,14 @@ class WarpinatorRepository @Inject constructor(
         }
 
         // Configure server
+        val ipInfo = Utils.iPAddress(appContext, prefs.networkInterface)
+        currentIPInfo = ipInfo
+        val ipStr = ipInfo?.address?.hostAddress
+
         val config = UserConfig(
             port = prefs.port.toUShort(),
             regPort = prefs.authPort.toUShort(),
-            bindAddrV4 = null, // TODO: bind to selected interface
+            bindAddrV4 = ipStr,
             bindAddrV6 = null,
             groupCode = prefs.groupCode,
             hostname = Utils.getDeviceName(appContext),

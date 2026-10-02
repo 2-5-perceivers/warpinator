@@ -42,8 +42,8 @@ class PreferenceManager @Inject constructor(
     val networkInterface: String
         get() = prefs.getString(
             KEY_NETWORK_INTERFACE,
-            "AUTO",
-        ) ?: "AUTO"
+            DEFAULT_NETWORK_INTERFACE,
+        ) ?: DEFAULT_NETWORK_INTERFACE
     val groupCode: String
         get() = prefs.getString(KEY_GROUP_CODE, DEFAULT_GROUP_CODE)
             ?: DEFAULT_GROUP_CODE

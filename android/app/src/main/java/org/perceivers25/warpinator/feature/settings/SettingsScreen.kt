@@ -35,6 +35,7 @@ import org.perceivers25.warpinator.core.design.shapes.segmentedDynamicShapes
 import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
 import org.perceivers25.warpinator.core.model.preferences.ThemeOptions
 import org.perceivers25.warpinator.core.system.AutoAcceptValue
+import org.perceivers25.warpinator.core.system.PreferenceManager
 import org.perceivers25.warpinator.core.utils.ProfilePicturePainter
 import org.perceivers25.warpinator.feature.settings.components.*
 import org.perceivers25.warpinator.feature.settings.state.SettingsUiState
@@ -383,11 +384,11 @@ fun SettingsScreenContent(
                     content = { Text(stringResource(R.string.network_interface_settings_title)) },
                     supportingContent = {
                         Text(
-                            if (state.networkInterface != "AUTO") stringResource(
+                            if (state.networkInterface != PreferenceManager.DEFAULT_NETWORK_INTERFACE) stringResource(
                                 R.string.network_interface_settings_summary,
                                 state.networkInterface,
                             )
-                            else state.networkInterface,
+                            else "Auto",
                         )
                     },
                     onClick = { showInterfaceDialog = true },
@@ -466,7 +467,10 @@ fun SettingsScreenContent(
         OptionsDialog(
             title = stringResource(R.string.network_interface_settings_title),
             options = options,
-            currentSelectionIndex = values.indexOf(state.networkInterface),
+            currentSelectionIndex = maxOf(
+                values.indexOf(state.networkInterface),
+                0,
+            ),
             onDismiss = { showInterfaceDialog = false },
             onOptionSelected = { idx -> onNetworkInterfaceChange(values[idx]) },
         )

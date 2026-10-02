@@ -181,6 +181,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setNetworkInterface(value: String) {
         preferenceManager.setNetworkInterface(value)
+        viewModelScope.launch { _uiMessages.send(NeedsRestartMessage()) }
     }
 
     fun setNotifyIncoming(value: Boolean) {
