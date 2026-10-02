@@ -26,7 +26,9 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import org.perceivers25.warpinator.R
-import org.perceivers25.warpinator.app.LocalNavController
+import org.perceivers25.warpinator.app.AboutRoute
+import org.perceivers25.warpinator.app.LocalNavigator
+import org.perceivers25.warpinator.app.SettingsRoute
 import org.perceivers25.warpinator.core.design.components.MenuAction
 import org.perceivers25.warpinator.core.design.components.MenuGroup
 import org.perceivers25.warpinator.core.design.components.MenuGroupsPopup
@@ -59,7 +61,7 @@ fun HomeMenu(
     var menuOpen by rememberSaveable { mutableStateOf(initiallyExpanded) }
     val groupInteractionSource = remember { MutableInteractionSource() }
 
-    val navController = LocalNavController.current
+    val navigator = LocalNavigator.current
     val context = LocalContext.current
 
     val menuGroups = listOf(
@@ -95,7 +97,7 @@ fun HomeMenu(
                 MenuAction(
                     stringResource(R.string.settings_title),
                     trailingIcon = Icons.Rounded.Settings,
-                    onClick = { navController?.navigate("settings") },
+                    onClick = { navigator?.navigate(SettingsRoute()) },
                 ),
                 MenuAction(
                     stringResource(R.string.save_log_label),
@@ -107,7 +109,7 @@ fun HomeMenu(
                 MenuAction(
                     stringResource(R.string.about_title),
                     trailingIcon = Icons.Outlined.Info,
-                    onClick = { navController?.navigate("about") },
+                    onClick = { navigator?.navigate(AboutRoute) },
                 ),
             ),
         ),

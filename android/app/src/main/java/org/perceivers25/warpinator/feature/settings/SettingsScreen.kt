@@ -28,7 +28,7 @@ import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import org.perceivers25.warpinator.R
-import org.perceivers25.warpinator.app.LocalNavController
+import org.perceivers25.warpinator.app.LocalNavigator
 import org.perceivers25.warpinator.core.design.components.DynamicAvatarCircle
 import org.perceivers25.warpinator.core.design.components.MessagesHandlerEffect
 import org.perceivers25.warpinator.core.design.shapes.segmentedDynamicShapes
@@ -48,7 +48,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
-    val navController = LocalNavController.current
+    val navigator = LocalNavigator.current
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -76,7 +76,7 @@ fun SettingsScreen(
     SettingsScreenContent(
         state = state,
         snackbarHostState = snackbarHostState,
-        onBackClick = { navController?.popBackStack() },
+        onBackClick = { navigator?.goBack() },
         onDisplayNameChange = viewModel::setDisplayName,
         onProfilePictureChange = viewModel::setProfilePicture,
         onPickCustomProfilePicture = viewModel::handleCustomProfilePicture,

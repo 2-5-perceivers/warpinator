@@ -16,7 +16,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import org.perceivers25.warpinator.core.data.ThemeViewModel
 import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
@@ -73,8 +72,6 @@ class MainActivity : ComponentActivity() {
         val needsDirSetup = !validateDownloadDir(this, prefs.downloadDirUri)
 
         setContent {
-            val navController = rememberNavController()
-
             val themeViewModel: ThemeViewModel = hiltViewModel()
             val theme by themeViewModel.theme
             val useDynamicColors by themeViewModel.dynamicColors
@@ -106,7 +103,7 @@ class MainActivity : ComponentActivity() {
                 CompositionLocalProvider(
                     LocalKeyShortcutDispatcher provides keyShortcutDispatcher,
                 ) {
-                    WarpinatorApp(navController, needsDirSetup)
+                    WarpinatorApp(needsDirSetup)
                 }
             }
         }

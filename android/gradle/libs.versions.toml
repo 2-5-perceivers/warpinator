@@ -12,7 +12,8 @@ composeBom = "2026.03.01"
 daggerHilt = "2.59.2"
 ksp = "2.3.4"
 dependencyAnalysis = "3.7.0"
-navigationCompose = "2.9.0"
+navigation3 = "1.2.0"
+lifecycleViewmodelNav3 = "2.11.0"
 zxing = "3.5.3"
 
 
@@ -22,7 +23,9 @@ androidx-hilt-lifecycle-viewmodel-compose = { module = "androidx.hilt:hilt-lifec
 androidx-hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
 androidx-lifecycle-service = { module = "androidx.lifecycle:lifecycle-service" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose" }
-androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+androidx-lifecycle-viewmodel-navigation3 = { module = "androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "lifecycleViewmodelNav3" }
+androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
+androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
 androidx-preference = { group = "androidx.preference", name = "preference", version.ref = "androidx-preference" }
 zxing = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hiltAndroid" }

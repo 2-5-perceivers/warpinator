@@ -22,7 +22,7 @@ import androidx.compose.ui.tooling.preview.PreviewLightDark
 import androidx.compose.ui.unit.dp
 import org.perceivers25.warpinator.BuildConfig
 import org.perceivers25.warpinator.R
-import org.perceivers25.warpinator.app.LocalNavController
+import org.perceivers25.warpinator.app.LocalNavigator
 import org.perceivers25.warpinator.core.design.shapes.segmentedDynamicShapes
 import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
 import org.perceivers25.warpinator.core.utils.Utils
@@ -43,7 +43,7 @@ private const val LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.html"
 @Composable
 fun AboutScreen() {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    val navController = LocalNavController.current
+    val navigator = LocalNavigator.current
     val context = LocalContext.current
 
     Scaffold(
@@ -52,7 +52,7 @@ fun AboutScreen() {
             MediumFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.about_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { navController?.popBackStack() }) {
+                    IconButton(onClick = { navigator?.goBack() }) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
