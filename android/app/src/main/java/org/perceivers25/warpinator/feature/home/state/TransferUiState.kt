@@ -51,6 +51,7 @@ data class TransferUiState(
     val allowDismiss: Boolean,
     val actionButtons: TransferUiActionButtons,
     val progressIndicator: TransferUiProgressIndicator,
+    val useCompression: Boolean = false,
 )
 
 @Composable
@@ -139,6 +140,7 @@ fun TransferUi.toUiState(): TransferUiState {
         allowDismiss = allowDismiss,
         actionButtons = actionButtons,
         progressIndicator = progressIndicator,
+        useCompression = this.useCompression,
     )
 }
 

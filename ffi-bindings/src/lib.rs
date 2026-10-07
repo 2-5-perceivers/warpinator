@@ -25,6 +25,7 @@ pub struct Warpinator {
     remote_manager: RwLock<Option<warpinator_lib::remote_manager::RemoteManager>>,
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     runtime: tokio::runtime::Runtime,
+    user_config: warpinator_lib::config::user::UserConfig,
 }
 
 #[derive(uniffi::Error, thiserror::Error, Debug)]
@@ -91,7 +92,7 @@ impl Warpinator {
         let protocol_config = protocol_config.map(|c| c.to_config());
 
         let mut server_builder =
-            warpinator_lib::WarpinatorServer::builder().user_config(user_config);
+            warpinator_lib::WarpinatorServer::builder().user_config(user_config.clone());
 
         if let Some(protocol_config) = protocol_config {
             server_builder = server_builder.protocol_config(protocol_config);
@@ -109,6 +110,7 @@ impl Warpinator {
             remote_manager: RwLock::new(Some(remote_manager)),
             shutdown_tx: Mutex::new(None),
             runtime,
+            user_config,
         }))
     }
 }
@@ -128,7 +130,7 @@ impl Warpinator {
         let protocol_config = protocol_config.map(|c| c.to_config());
 
         let mut server_builder =
-            warpinator_lib::WarpinatorServer::builder().user_config(user_config);
+            warpinator_lib::WarpinatorServer::builder().user_config(user_config.clone());
 
         if let Some(protocol_config) = protocol_config {
             server_builder = server_builder.protocol_config(protocol_config);
@@ -149,12 +151,16 @@ impl Warpinator {
             remote_manager: RwLock::new(Some(remote_manager)),
             shutdown_tx: Mutex::new(None),
             runtime,
+            user_config,
         }))
     }
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl Warpinator {
+    pub fn set_use_compression(&self, use_compression: bool) {
+        self.user_config.set_use_compression(use_compression);
+    }
     pub fn start(&self, listener: Box<dyn WarpEventListener>) -> Result<()> {
         let server = self
             .server

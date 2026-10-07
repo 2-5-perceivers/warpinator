@@ -12,6 +12,7 @@ pub struct UserConfig {
     pub username: Option<String>,
     pub display_name: Option<String>,
     pub picture: Option<Vec<u8>>,
+    pub use_compression: Option<bool>,
 }
 
 impl UserConfig {
@@ -57,6 +58,10 @@ impl UserConfig {
 
         if let Some(picture) = self.picture {
             config_builder = config_builder.picture(&picture);
+        }
+
+        if let Some(use_compression) = self.use_compression {
+            config_builder = config_builder.use_compression(use_compression);
         }
 
         Ok(config_builder.build())

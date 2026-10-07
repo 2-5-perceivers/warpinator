@@ -72,6 +72,7 @@ pub struct Transfer {
     /// Kind of transfer - incoming or outgoing. Contains additional data
     /// relevant to the kind
     pub kind: TransferKind,
+    pub use_compression: bool,
 }
 
 #[derive(uniffi::Enum)]
@@ -96,6 +97,7 @@ impl From<&warpinator_lib::types::transfer::Transfer> for Transfer {
             single_name: value.single_name.clone(),
             single_mime_type: value.single_mime_type.clone(),
             kind: (&value.kind).into(),
+            use_compression: value.use_compression,
         }
     }
 }

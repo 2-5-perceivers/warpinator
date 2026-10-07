@@ -400,6 +400,7 @@
     <string name="transfer_direction_send_short">Sending</string>
     <string name="outgoing_transfer">Outgoing transfer</string>
     <string name="incoming_transfer">Incoming transfer</string>
+    <string name="compressed_label">%1$s (compressed)</string>
 
     <string name="transfer_state_init">Initializing</string>
     <string name="transfer_state_waiting_permission">Waiting for permission…</string>

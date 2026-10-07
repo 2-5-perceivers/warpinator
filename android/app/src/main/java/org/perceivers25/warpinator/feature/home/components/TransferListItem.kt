@@ -281,12 +281,21 @@ fun TransferListItem(
                                 // Detailed stats (Speed, Transferred/Total)
                                 ListItem(
                                     headlineContent = {
-                                        Text(
+                                        val directionText =
                                             if (uiState.isSending) stringResource(
                                                 R.string.outgoing_transfer,
                                             ) else stringResource(
                                                 R.string.incoming_transfer,
-                                            ),
+                                            )
+                                        Text(
+                                            if (uiState.useCompression) {
+                                                stringResource(
+                                                    R.string.compressed_label,
+                                                    directionText,
+                                                )
+                                            } else {
+                                                directionText
+                                            },
                                         )
                                     },
                                     supportingContent = { Text(uiState.statusLongText) },
@@ -535,6 +544,7 @@ fun TransferListItemPreview() {
         totalBytes = 1000 * 1000 * 100, // 100MB
         bytesTransferred = 1000 * 1000 * 45, // 45MB
         bytesPerSecond = 1000 * 1000 * 30, // 30MB/s
+        useCompression = true,
     )
 
     // Finished Transfer

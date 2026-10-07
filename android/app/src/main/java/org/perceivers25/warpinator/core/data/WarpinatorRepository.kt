@@ -1,6 +1,7 @@
 package org.perceivers25.warpinator.core.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -65,10 +66,20 @@ class WarpinatorRepository @Inject constructor(
             prefs.networkInterface,
         ))?.address?.hostAddress
 
+    private val preferenceChangeListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PreferenceManager.KEY_USE_COMPRESSION) {
+                server?.setUseCompression(prefs.useCompression)
+            }
+        }
+
     init {
         prefs.loadSettings()
         setTracingSubscriber("WarpinatorLib", LogLevel.DEBUG)
         setVirtualFilesystem(WarpinatorVirtualFilesystem(appContext))
+        prefs.prefs.registerOnSharedPreferenceChangeListener(
+            preferenceChangeListener,
+        )
     }
 
     fun start() {
@@ -98,6 +109,7 @@ class WarpinatorRepository @Inject constructor(
             username = prefs.displayName.replace(" ", "-").lowercase(),
             displayName = prefs.displayName,
             picture = stream?.toByteArray(),
+            useCompression = prefs.useCompression,
         )
 
         server = Warpinator(
@@ -157,14 +169,14 @@ class WarpinatorRepository @Inject constructor(
                                 picture = if (remote.picture) server!!.remotePicture(
                                     uuid,
                                 ).let { picture ->
-                                        if (remote.pictureVersion.toByte() != it.pictureVersion) {
-                                            BitmapFactory.decodeByteArray(
-                                                picture,
-                                                0,
-                                                picture.size,
-                                            )
-                                        } else it.picture
-                                    } else null,
+                                    if (remote.pictureVersion.toByte() != it.pictureVersion) {
+                                        BitmapFactory.decodeByteArray(
+                                            picture,
+                                            0,
+                                            picture.size,
+                                        )
+                                    } else it.picture
+                                } else null,
                                 pictureVersion = remote.pictureVersion.toByte(),
                                 messageSupport = remote.messageSupport,
                             )
@@ -203,6 +215,7 @@ class WarpinatorRepository @Inject constructor(
                                 transfer.entryNames,
                                 prefs.downloadDirUri!!.toUri(),
                             ) else false,
+                            useCompression = transfer.useCompression,
                         )
 
                         addOrUpdateTransfer(
@@ -266,6 +279,7 @@ class WarpinatorRepository @Inject constructor(
                                     is TransferKind.Incoming -> TransferKindUi.Incoming
                                     is TransferKind.Outgoing -> TransferKindUi.Outgoing
                                 },
+                                useCompression = transfer.useCompression,
                             ),
                         )
                     } catch (e: WarpException) {
@@ -281,8 +295,8 @@ class WarpinatorRepository @Inject constructor(
                             emptyList(),
                         )
                     }.update { currentList ->
-                            currentList.filter { it.uuid != transferUuid }
-                        }
+                        currentList.filter { it.uuid != transferUuid }
+                    }
                 }
 
                 override suspend fun onMessageAdded(
@@ -296,9 +310,9 @@ class WarpinatorRepository @Inject constructor(
                                 emptyList(),
                             )
                         }.update { currentList ->
-                                val newList = currentList + message
-                                newList
-                            }
+                            val newList = currentList + message
+                            newList
+                        }
 
                         if (message.direction == Direction.RECEIVED) {
                             updateRemote(remoteUuid) {
@@ -318,8 +332,8 @@ class WarpinatorRepository @Inject constructor(
                             emptyList(),
                         )
                     }.update { currentList ->
-                            currentList.filter { it.uuid != messageUuid }
-                        }
+                        currentList.filter { it.uuid != messageUuid }
+                    }
                 }
             },
         )
@@ -367,8 +381,8 @@ class WarpinatorRepository @Inject constructor(
                 val newList = if (index != -1) {
                     val oldTransfer = currentList[index]
 
-                    // Only update on state changes or if more than 0.5% progress was made (with a minimum of 5KiB)
-                    if ((oldTransfer.state != newTransfer.state) || (newTransfer.bytesTransferred - oldTransfer.bytesTransferred > max(
+                    // Only update on state changes, compression changes, or if more than 0.5% progress was made (with a minimum of 5KiB)
+                    if ((oldTransfer.state != newTransfer.state) || (oldTransfer.useCompression != newTransfer.useCompression) || (newTransfer.bytesTransferred - oldTransfer.bytesTransferred > max(
                             oldTransfer.totalBytes / 200,
                             5120,
                         ))

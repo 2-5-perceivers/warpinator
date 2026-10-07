@@ -247,6 +247,7 @@
     <string name="transfer_direction_send_short">Se trimite</string>
     <string name="outgoing_transfer">Transfer trimis</string>
     <string name="incoming_transfer">Transfer primit</string>
+    <string name="compressed_label">%1$s (compresat)</string>
     <string name="transfer_state_init">Se inițializează</string>
     <string name="transfer_state_waiting_permission">Se așteaptă permisiunea…</string>
     <string name="transfer_state_waiting_permission_overwrite_warning">Se așteaptă permisiunea… (Fișierul va fi suprascris)</string>

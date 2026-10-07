@@ -852,6 +852,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_send_transfer_request(
     ): Int
+    external fun uniffi_warpinator_checksum_method_warpinator_set_use_compression(
+    ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_start(
     ): Int
     external fun uniffi_warpinator_checksum_method_warpinator_stop(
@@ -949,6 +951,8 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_warpinator_fn_method_warpinator_send_transfer_request(`ptr`: Long,`remoteUuid`: RustBuffer.ByValue,`paths`: RustBuffer.ByValue,
     ): Long
+    external fun uniffi_warpinator_fn_method_warpinator_set_use_compression(`ptr`: Long,`useCompression`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_warpinator_fn_method_warpinator_start(`ptr`: Long,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_warpinator_fn_method_warpinator_stop(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1131,6 +1135,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_warpinator_checksum_method_warpinator_send_transfer_request() and 0xFFFF) != 56247) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_warpinator_checksum_method_warpinator_set_use_compression() and 0xFFFF) != 34264) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_warpinator_checksum_method_warpinator_start() and 0xFFFF) != 42459) {
@@ -1877,6 +1884,8 @@ public interface WarpinatorInterface {
     
     suspend fun `sendTransferRequest`(`remoteUuid`: kotlin.String, `paths`: List<kotlin.String>)
     
+    fun `setUseCompression`(`useCompression`: kotlin.Boolean)
+    
     fun `start`(`listener`: WarpEventListener)
     
     fun `stop`()
@@ -2304,6 +2313,19 @@ open class Warpinator: Disposable, AutoCloseable, WarpinatorInterface
     )
     }
 
+    override fun `setUseCompression`(`useCompression`: kotlin.Boolean)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_warpinator_fn_method_warpinator_set_use_compression(
+        it,
+        
+        FfiConverterBoolean.lower(`useCompression`),_status)
+}
+    }
+    
+    
+
     
     @Throws(WarpException::class)override fun `start`(`listener`: WarpEventListener)
         = 
@@ -2706,6 +2728,8 @@ data class Transfer (
      * relevant to the kind
      */
     var `kind`: TransferKind
+    , 
+    var `useCompression`: kotlin.Boolean
     
 ){
     
@@ -2734,6 +2758,7 @@ public object FfiConverterTypeTransfer: FfiConverterRustBuffer<Transfer> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterTypeTransferKind.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -2749,7 +2774,8 @@ public object FfiConverterTypeTransfer: FfiConverterRustBuffer<Transfer> {
             FfiConverterSequenceString.allocationSize(value.`entryNames`) +
             FfiConverterOptionalString.allocationSize(value.`singleName`) +
             FfiConverterOptionalString.allocationSize(value.`singleMimeType`) +
-            FfiConverterTypeTransferKind.allocationSize(value.`kind`)
+            FfiConverterTypeTransferKind.allocationSize(value.`kind`) +
+            FfiConverterBoolean.allocationSize(value.`useCompression`)
     )
 
     override fun write(value: Transfer, buf: ByteBuffer) {
@@ -2765,6 +2791,7 @@ public object FfiConverterTypeTransfer: FfiConverterRustBuffer<Transfer> {
             FfiConverterOptionalString.write(value.`singleName`, buf)
             FfiConverterOptionalString.write(value.`singleMimeType`, buf)
             FfiConverterTypeTransferKind.write(value.`kind`, buf)
+            FfiConverterBoolean.write(value.`useCompression`, buf)
     }
 }
 
@@ -2788,6 +2815,8 @@ data class UserConfig (
     var `displayName`: kotlin.String?
     , 
     var `picture`: kotlin.ByteArray?
+    , 
+    var `useCompression`: kotlin.Boolean?
     
 ){
     
@@ -2813,6 +2842,7 @@ public object FfiConverterTypeUserConfig: FfiConverterRustBuffer<UserConfig> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalByteArray.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
         )
     }
 
@@ -2825,7 +2855,8 @@ public object FfiConverterTypeUserConfig: FfiConverterRustBuffer<UserConfig> {
             FfiConverterOptionalString.allocationSize(value.`hostname`) +
             FfiConverterOptionalString.allocationSize(value.`username`) +
             FfiConverterOptionalString.allocationSize(value.`displayName`) +
-            FfiConverterOptionalByteArray.allocationSize(value.`picture`)
+            FfiConverterOptionalByteArray.allocationSize(value.`picture`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`useCompression`)
     )
 
     override fun write(value: UserConfig, buf: ByteBuffer) {
@@ -2838,6 +2869,7 @@ public object FfiConverterTypeUserConfig: FfiConverterRustBuffer<UserConfig> {
             FfiConverterOptionalString.write(value.`username`, buf)
             FfiConverterOptionalString.write(value.`displayName`, buf)
             FfiConverterOptionalByteArray.write(value.`picture`, buf)
+            FfiConverterOptionalBoolean.write(value.`useCompression`, buf)
     }
 }
 
@@ -4594,6 +4626,38 @@ public object FfiConverterOptionalUShort: FfiConverterRustBuffer<kotlin.UShort?>
         } else {
             buf.put(1)
             FfiConverterUShort.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
         }
     }
 }

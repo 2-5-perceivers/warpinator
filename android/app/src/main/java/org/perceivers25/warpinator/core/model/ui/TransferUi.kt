@@ -20,4 +20,5 @@ data class TransferUi(
     var singleMimeType: String? = null,
     var kind: TransferKindUi = TransferKindUi.Outgoing,
     var overwriteWarning: Boolean = false,
+    var useCompression: Boolean = false,
 )
