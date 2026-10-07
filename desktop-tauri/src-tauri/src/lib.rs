@@ -88,6 +88,7 @@ pub fn run() {
             select_user_profile_picture,
             clear_user_profile_picture,
             update_user_display_name,
+            update_user_compression,
         ])
         .register_asynchronous_uri_scheme_protocol("avatars", avatars::avatars_protocol_handler)
         .setup(|app| {
@@ -110,6 +111,9 @@ pub fn run() {
                 .get("display-name")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| whoami::realname().unwrap_or("Warpinator".to_string()));
+
+            let use_compression =
+                store.get("use-compression").and_then(|v| v.as_bool()).unwrap_or(false);
 
             let profile_picture = store.get("profile-picture").and_then(|v| {
                 fs::read(handle.path().app_data_dir().ok()?.to_path_buf().join(v.as_str().unwrap()))
@@ -137,7 +141,8 @@ pub fn run() {
                 .hostname(&hostname)
                 .username(&username)
                 .display_name(&display_name)
-                .group_code(&group_code);
+                .group_code(&group_code)
+                .use_compression(use_compression);
 
             if let Some(picture) = profile_picture {
                 user_config_builder = user_config_builder.picture(&*picture);

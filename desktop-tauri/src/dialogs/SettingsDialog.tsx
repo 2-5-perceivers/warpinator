@@ -35,6 +35,7 @@ export function SettingsContent() {
     setNotificationsMessages,
     setNotificationsTransfers,
     setOverwrite,
+    setUseCompression,
     setAutoAccept,
     setPortTransfers,
     setPortRegistration,
@@ -184,6 +185,19 @@ export function SettingsContent() {
                   id="overwrite"
                   checked={!!settings?.overwrite}
                   onCheckedChange={(checked) => setOverwrite(Boolean(checked))}
+                  disabled={disabled}
+                />
+              </Field>
+              <Field orientation="horizontal">
+                <FieldLabel htmlFor="use_compression">
+                  Try to use compression
+                </FieldLabel>
+                <Switch
+                  id="use_compression"
+                  checked={!!settings?.use_compression}
+                  onCheckedChange={(checked) =>
+                    setUseCompression(Boolean(checked))
+                  }
                   disabled={disabled}
                 />
               </Field>

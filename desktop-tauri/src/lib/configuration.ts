@@ -5,6 +5,7 @@ export interface Configuration {
   hostname: string;
   username: string;
   display_name: string;
+  use_compression: boolean;
 }
 
 export async function getConfiguration() {

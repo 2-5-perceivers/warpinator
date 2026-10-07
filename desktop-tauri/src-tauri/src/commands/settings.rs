@@ -19,6 +19,7 @@ pub struct Configuration {
     pub hostname: String,
     pub username: String,
     pub display_name: String,
+    pub use_compression: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -49,6 +50,7 @@ pub async fn get_user_config(config: State<'_, UserConfig>) -> Result<Configurat
         hostname: config.hostname.clone(),
         username: config.username.clone(),
         display_name: config.display_name.read().await.clone(),
+        use_compression: config.use_compression(),
     })
 }
 
@@ -140,6 +142,21 @@ pub async fn update_user_display_name(
 ) -> Result<(), String> {
     config.set_display_name(&*name).await;
     app_handle.store("settings.json").map_err(|_| "Failed to get store")?.set("display-name", name);
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_user_compression(
+    app_handle: tauri::AppHandle,
+    config: State<'_, UserConfig>,
+    enabled: bool,
+) -> Result<(), String> {
+    config.set_use_compression(enabled);
+    app_handle
+        .store("settings.json")
+        .map_err(|_| "Failed to get store")?
+        .set("use-compression", enabled);
 
     Ok(())
 }

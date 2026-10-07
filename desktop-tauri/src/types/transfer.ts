@@ -40,4 +40,5 @@ export interface Transfer {
   single_name: string | null;
   single_mime_type: string | null;
   kind: TransferKind;
+  use_compression: boolean;
 }

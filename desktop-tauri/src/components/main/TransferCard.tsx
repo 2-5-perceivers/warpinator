@@ -214,6 +214,11 @@ export function TransferCard({ transfer }: { transfer: Transfer }) {
             <Badge variant="outline" className="shrink-0">
               {formatBytes(transfer.total_bytes)}
             </Badge>
+            {transfer.use_compression ? (
+              <Badge variant="secondary" className="shrink-0">
+                Compressed
+              </Badge>
+            ) : null}
           </div>
           <div className="text-xs truncate text-muted-foreground">
             {formatState(transfer.state)}

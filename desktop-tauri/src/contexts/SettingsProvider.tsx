@@ -33,6 +33,7 @@ type SettingsContextValue = {
   setNotificationsTransfers: (enabled: boolean) => Promise<void>;
   setNotificationsMessages: (enabled: boolean) => Promise<void>;
   setOverwrite: (enabled: boolean) => Promise<void>;
+  setUseCompression: (enabled: boolean) => Promise<void>;
   setAutoAccept: (value: AutoAcceptOption) => Promise<void>;
   toggleFavorite: (remoteUuid: string) => Promise<void>;
   isFavorite: (remoteUuid: string) => boolean;
@@ -98,6 +99,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
             true,
           ),
           overwrite: await readSetting("overwrite", true),
+          use_compression: await readSetting(
+            "use-compression",
+            config.use_compression ?? false,
+          ),
           autoAccept: await readSetting<AutoAcceptOption>(
             "auto-accept",
             "none",
@@ -196,6 +201,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         await persist("overwrite", enabled, (prev) => ({
           ...prev,
           overwrite: enabled,
+        }));
+      },
+      setUseCompression: async (enabled: boolean) => {
+        await invoke("update_user_compression", { enabled });
+        await persist("use-compression", enabled, (prev) => ({
+          ...prev,
+          use_compression: enabled,
         }));
       },
       setAutoAccept: async (value: AutoAcceptOption) => {
