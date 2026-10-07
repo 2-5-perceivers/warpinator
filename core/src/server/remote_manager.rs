@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Weak};
 
 use thiserror::Error;
@@ -73,6 +74,7 @@ pub struct RemoteManagerInner {
     root_token: CancellationToken,
     authenticator: Arc<Authenticator>,
     protocol_config: ProtocolConfig,
+    should_use_compression: Arc<AtomicBool>,
     server_hostname: String,
     server_ip: IpAddr,
     server_fullname: String,
@@ -124,6 +126,7 @@ impl RemoteManager {
             root_token: cancellation_token,
             authenticator,
             protocol_config,
+            should_use_compression: user_config.use_compression.clone(),
             server_hostname: user_config.hostname.clone(),
             server_ip: IpAddr::from(user_config.bind_addr_v4?),
             server_fullname: server_fullname.clone(),
@@ -157,6 +160,7 @@ impl RemoteManager {
             Arc::clone(&self.inner.authenticator),
             &self.inner.root_token,
             self.inner.protocol_config.clone(),
+            self.inner.should_use_compression.clone(),
             self.inner.server_hostname.clone(),
             self.inner.server_ip,
             self.inner.server_fullname.clone(),
@@ -308,11 +312,13 @@ impl RemoteManagerInner {
             && let Some(transfer) = remote.transfers.iter_mut().find(|t| t.uuid == transfer_uuid)
         {
             let old_state = transfer.state.clone();
+            let old_compression = transfer.use_compression;
 
             f(transfer);
 
             if self.event_tx.len() < 128
                 || std::mem::discriminant(&transfer.state) != std::mem::discriminant(&old_state)
+                || transfer.use_compression != old_compression
             {
                 let _ = self.event_tx.send(WarpEvent::TransferUpdated(
                     remote_uuid.to_string(),

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+pub mod compression;
 pub mod transfer_receiver;
 pub mod transfer_sender;
 

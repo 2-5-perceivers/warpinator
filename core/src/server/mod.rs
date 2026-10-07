@@ -307,7 +307,8 @@ impl WarpinatorServer {
     }
 
     async fn shutdown_mdns(&self) -> () {
-        // This will automatically unregister all services and shut down the daemon
+        // This will automatically unregister all services and shut down the
+        // daemon
         let mut result = self.mdns.shutdown();
         if let Err(mdns_sd::Error::Again) = result {
             tracing::debug!("mDNS shutdown returned Again, retrying");

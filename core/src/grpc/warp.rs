@@ -185,7 +185,8 @@ impl Warp for WarpServer {
         let span = tracing::Span::current();
         span.record("id", ident.as_str());
 
-        let transfer = Transfer::from(req);
+        let mut transfer = Transfer::from(req);
+        transfer.use_compression = transfer.use_compression && self.user_config.use_compression();
         self.remote_manager
             .add_transfer(ident.as_str(), transfer)
             .await
@@ -216,9 +217,12 @@ impl Warp for WarpServer {
             }
         };
 
+        let use_compression = self.user_config.use_compression() && req.use_compression;
+
         self.remote_manager
             .update_transfer(&transfer.remote_uuid, &transfer.uuid, |t| {
                 t.state = TransferState::InProgress;
+                t.use_compression = use_compression;
             })
             .await
             .map_err(|_| Status::internal("Failed to update transfer state"))?;
@@ -232,6 +236,7 @@ impl Warp for WarpServer {
             source_paths,
             tx,
             cancellation_token,
+            use_compression,
             #[cfg(feature = "power_manager")]
             self.power_manager.clone(),
         ));

@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::RwLock;
 
@@ -20,6 +21,7 @@ pub struct UserConfigBuilder {
     username: Option<String>,
     display_name: Option<String>,
     picture: Option<Vec<u8>>,
+    use_compression: Option<bool>,
 }
 
 impl UserConfigBuilder {
@@ -34,6 +36,7 @@ impl UserConfigBuilder {
             username: None,
             display_name: None,
             picture: None,
+            use_compression: None,
         }
     }
 
@@ -101,6 +104,11 @@ impl UserConfigBuilder {
         self
     }
 
+    pub fn use_compression(mut self, enabled: bool) -> Self {
+        self.use_compression = Some(enabled);
+        self
+    }
+
     pub fn build(mut self) -> UserConfig {
         if self.bind_addr_v4.is_none() && self.bind_addr_v6.is_none() {
             self.bind_addr_v4 = Some(Ipv4Addr::UNSPECIFIED);
@@ -119,6 +127,7 @@ impl UserConfigBuilder {
                 self.display_name.unwrap_or_else(|| DEFAULT_DISPLAY_NAME.to_string()),
             )),
             picture: Arc::new(RwLock::new(self.picture)),
+            use_compression: Arc::new(AtomicBool::new(self.use_compression.unwrap_or(false))),
         }
     }
 }
@@ -136,6 +145,7 @@ pub struct UserConfig {
     /// The user's picture as a byte vector. The image format is PNG. This is
     /// optional and can be None if the user does not want to set a picture.
     pub picture: Arc<RwLock<Option<Vec<u8>>>>,
+    pub use_compression: Arc<AtomicBool>,
 }
 
 impl UserConfig {
@@ -152,6 +162,14 @@ impl UserConfig {
         let mut picture_guard = self.picture.write().await;
         *picture_guard = picture.map(|p| p.to_vec());
     }
+
+    pub fn use_compression(&self) -> bool {
+        self.use_compression.load(Ordering::Relaxed)
+    }
+
+    pub fn set_use_compression(&self, enabled: bool) {
+        self.use_compression.store(enabled, Ordering::Relaxed);
+    }
 }
 
 impl Default for UserConfig {
@@ -166,6 +184,7 @@ impl Default for UserConfig {
             username: DEFAULT_USERNAME.to_string(),
             display_name: Arc::new(RwLock::new(DEFAULT_DISPLAY_NAME.to_string())),
             picture: Arc::new(RwLock::new(None)),
+            use_compression: Arc::new(AtomicBool::new(false)),
         }
     }
 }

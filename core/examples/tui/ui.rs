@@ -168,8 +168,8 @@ fn draw_transfers(f: &mut Frame, app: &App, area: Rect) {
                 .map(|d| (d.displayed_bytes_per_second, d.displayed_bytes_transferred))
                 .unwrap_or((transfer.bytes_per_second, transfer.bytes_transferred));
 
-            // Stats: keep parentheses for size; for in-progress show (speed /s, X
-            // remaining)
+            // Stats: keep parentheses for size; for in-progress show (speed /s,
+            // X remaining)
             let stats = match transfer.state {
                 TransferState::InProgress => {
                     let speed = format!("{}/s", ByteSize(disp_bytes_per_sec));
@@ -186,14 +186,16 @@ fn draw_transfers(f: &mut Frame, app: &App, area: Rect) {
                 _ => format!("({})", ByteSize(transfer.total_bytes).to_string()),
             };
 
-            // Inline progress bar (10 segments) and percentage — only for InProgress
+            // Inline progress bar (10 segments) and percentage — only for
+            // InProgress
             let bar = if matches!(transfer.state, TransferState::InProgress)
                 && transfer.total_bytes > 0
             {
                 let ratio = (disp_bytes_transferred as f64) / (transfer.total_bytes as f64);
                 let pct = (ratio * 100.0).round() as u64;
                 let bar_len = 10usize;
-                // Use floor to avoid back-and-forth jitter when ratio hovers on a boundary
+                // Use floor to avoid back-and-forth jitter when ratio hovers on
+                // a boundary
                 let filled = ((ratio * (bar_len as f64)).floor() as usize).min(bar_len);
                 let filled_str: String = std::iter::repeat('█').take(filled).collect();
                 let empty_str: String = std::iter::repeat('░').take(bar_len - filled).collect();

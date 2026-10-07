@@ -60,6 +60,7 @@ pub(crate) async fn receive_stream(
     mut stream: Streaming<FileChunk>,
     destination: PathBuf,
     cancellation_token: CancellationToken,
+    use_compression: bool,
     #[cfg(feature = "power_manager")] power_manager: Arc<
         dyn crate::server::power_manager::PowerManager + Send + Sync,
     >,
@@ -74,6 +75,7 @@ pub(crate) async fn receive_stream(
         &mut stream,
         &destination,
         &cancellation_token,
+        use_compression,
     )
     .await;
 
@@ -108,6 +110,7 @@ async fn receive_stream_inner(
     stream: &mut Streaming<FileChunk>,
     destination: &PathBuf,
     cancellation_token: &CancellationToken,
+    use_compression: bool,
 ) -> Result<bool, TransferError> {
     let mut state = ReceiveState::new();
 
@@ -121,7 +124,7 @@ async fn receive_stream_inner(
             msg_result = stream.message() => {
                 match msg_result {
                     Ok(Some(chunk)) => {
-                        process_chunk(chunk, &mut state, destination, remote_manager, remote_uuid, transfer_uuid).await?;
+                        process_chunk(chunk, &mut state, destination, remote_manager, remote_uuid, transfer_uuid, use_compression).await?;
                     }
                     Ok(None) => {
                         // Stream finished successfully
@@ -149,6 +152,7 @@ async fn process_chunk(
     remote_manager: &Arc<RemoteManagerInner>,
     remote_uuid: &str,
     transfer_uuid: &str,
+    use_compression: bool,
 ) -> Result<(), TransferError> {
     let file_type = FileType::try_from(chunk.file_type).unwrap_or(FileType::File);
 
@@ -184,7 +188,14 @@ async fn process_chunk(
         }
     }
 
-    write_chunk(&chunk.chunk, state, remote_manager, remote_uuid, transfer_uuid).await?;
+    let chunk_data = if use_compression {
+        crate::server::transfers::compression::decompress_chunk(&chunk.chunk)
+            .map_err(|e| TransferError::from(e.kind()))?
+    } else {
+        chunk.chunk.to_vec()
+    };
+
+    write_chunk(&chunk_data, state, remote_manager, remote_uuid, transfer_uuid).await?;
 
     Ok(())
 }
@@ -197,6 +208,7 @@ async fn process_chunk(
     remote_manager: &Arc<RemoteManagerInner>,
     remote_uuid: &str,
     transfer_uuid: &str,
+    use_compression: bool,
 ) -> Result<(), TransferError> {
     let file_type = FileType::try_from(chunk.file_type).unwrap_or(FileType::File);
 
@@ -236,7 +248,14 @@ async fn process_chunk(
         }
     }
 
-    write_chunk(&chunk.chunk, state, remote_manager, remote_uuid, transfer_uuid).await?;
+    let chunk_data = if use_compression {
+        crate::server::transfers::compression::decompress_chunk(&chunk.chunk)
+            .map_err(|e| TransferError::from(e.kind()))?
+    } else {
+        chunk.chunk.to_vec()
+    };
+
+    write_chunk(&chunk_data, state, remote_manager, remote_uuid, transfer_uuid).await?;
 
     Ok(())
 }

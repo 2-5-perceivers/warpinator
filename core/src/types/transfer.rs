@@ -118,6 +118,8 @@ pub struct Transfer {
     /// Kind of transfer - incoming or outgoing. Contains additional data
     /// relevant to the kind
     pub kind: TransferKind,
+    /// Whether this transfer uses compression for file chunks
+    pub use_compression: bool,
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -168,16 +170,17 @@ impl Transfer {
             single_name: None,
             single_mime_type: None,
             kind: TransferKind::Outgoing { source_paths, cancellation_token },
+            use_compression: false,
         }
     }
 
-    pub fn as_proto(&self, service_id: &str) -> TransferOpRequest {
+    pub fn as_proto(&self, service_id: &str, use_compression: bool) -> TransferOpRequest {
         TransferOpRequest {
             info: Some(OpInfo {
                 ident: service_id.to_string(),
                 timestamp: self.protocol_id,
                 readable_name: String::default(),
-                use_compression: false,
+                use_compression,
             }),
             sender_name: String::default(),
             receiver_name: String::default(),
@@ -344,15 +347,11 @@ impl Transfer {
 
 impl From<TransferOpRequest> for Transfer {
     fn from(value: TransferOpRequest) -> Self {
+        let info = value.info.as_ref().expect("TransferOpRequest must have info");
         Transfer {
             uuid: uuid::Uuid::new_v4().to_string(),
-            remote_uuid: value
-                .info
-                .as_ref()
-                .expect("TransferOpRequest must have info")
-                .ident
-                .clone(),
-            protocol_id: value.info.expect("TransferOpRequest must have info").timestamp,
+            remote_uuid: info.ident.clone(),
+            protocol_id: info.timestamp,
             state: TransferState::WaitingPermission,
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
             total_bytes: value.size,
@@ -374,6 +373,7 @@ impl From<TransferOpRequest> for Transfer {
                 // default destination, should be updated when the transfer is accepted
                 destination: PathBuf::from("/"),
             },
+            use_compression: info.use_compression,
         }
     }
 }

@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use base64::Engine;
@@ -112,6 +113,7 @@ pub struct RemoteWorker {
     server_hostname: String,
     server_ip: IpAddr,
     server_fullname: String,
+    should_use_compression: Arc<AtomicBool>,
     #[cfg(feature = "power_manager")]
     power_manager: Arc<dyn crate::server::power_manager::PowerManager>,
 }
@@ -123,6 +125,7 @@ impl RemoteWorker {
         authenticator: Arc<Authenticator>,
         root_token: &CancellationToken,
         protocol_config: ProtocolConfig,
+        should_use_compression: Arc<AtomicBool>,
         server_hostname: String,
         server_ip: IpAddr,
         server_fullname: String,
@@ -144,6 +147,7 @@ impl RemoteWorker {
             server_hostname,
             server_ip,
             server_fullname,
+            should_use_compression,
             #[cfg(feature = "power_manager")]
             power_manager,
         };
@@ -204,8 +208,8 @@ impl RemoteWorker {
                     }
                     RemoteState::Error(ref e) => {
                         if matches!(e, RemoteConnectionError::GroupCodeMismatch) {
-                            // Group code mismatch is not retryable, stay in error state until
-                            // manual intervention
+                            // Group code mismatch is not retryable, stay in
+                            // error state until manual intervention
                             break;
                         }
                         if !wait_then_reconnect(&self, &mut state_rx).await {
@@ -477,12 +481,14 @@ impl RemoteWorker {
         let mut client = client.clone();
 
         let transfer_token = self.cancellation_token.child_token();
+        let use_compression =
+            self.should_use_compression.load(std::sync::atomic::Ordering::Relaxed);
 
         let mut transfer =
             Transfer::new_outgoing(self.uuid.clone(), source_paths.clone(), transfer_token).await;
 
-        // Add transfer in initializing state before processing paths, so it appears in
-        // UI immediately
+        // Add transfer in initializing state before processing paths, so it
+        // appears in UI immediately
         self.manager()?.add_transfer(&self.uuid, transfer.clone()).await?;
 
         let processing_result = transfer.process_paths(&source_paths).await;
@@ -490,7 +496,9 @@ impl RemoteWorker {
         match processing_result {
             Ok(_) => {
                 client
-                    .process_transfer_op_request(transfer.as_proto(self.server_fullname.as_str()))
+                    .process_transfer_op_request(
+                        transfer.as_proto(self.server_fullname.as_str(), use_compression),
+                    )
                     .await?;
                 self.manager()?
                     .update_transfer(&self.uuid, &transfer.uuid, |t| {
@@ -553,11 +561,14 @@ impl RemoteWorker {
             ));
         }
 
+        let use_compression = transfer.use_compression
+            && self.should_use_compression.load(std::sync::atomic::Ordering::Relaxed);
+
         let stream = client
             .start_transfer(OpInfo {
                 ident: self.server_fullname.clone(),
                 timestamp: transfer.protocol_id,
-                use_compression: false,
+                use_compression,
                 readable_name: String::default(),
             })
             .await?
@@ -568,6 +579,7 @@ impl RemoteWorker {
         self.manager()?
             .update_transfer(&self.uuid, transfer_uuid, |t| {
                 t.state = TransferState::InProgress;
+                t.use_compression = use_compression;
                 t.kind = TransferKind::Incoming { destination: destination.clone() };
             })
             .await?;
@@ -579,6 +591,7 @@ impl RemoteWorker {
             stream,
             destination,
             self.cancellation_token.child_token(),
+            use_compression,
             #[cfg(feature = "power_manager")]
             self.power_manager.clone(),
         ));

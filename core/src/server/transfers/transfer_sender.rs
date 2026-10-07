@@ -25,6 +25,7 @@ pub(crate) async fn send_stream(
     source_paths: Vec<PathBuf>,
     tx: Sender<Result<FileChunk, Status>>,
     cancellation_token: CancellationToken,
+    use_compression: bool,
     #[cfg(feature = "power_manager")] power_manager: std::sync::Arc<
         dyn crate::server::power_manager::PowerManager,
     >,
@@ -39,6 +40,7 @@ pub(crate) async fn send_stream(
         &source_paths,
         &tx,
         &cancellation_token,
+        use_compression,
     )
     .await;
 
@@ -65,6 +67,7 @@ async fn send_stream_inner(
     source_paths: &[PathBuf],
     tx: &Sender<Result<FileChunk, Status>>,
     cancellation_token: &CancellationToken,
+    use_compression: bool,
 ) -> Result<bool, TransferError> {
     let mut speed = MovingAverageCalculator::new(30);
 
@@ -97,6 +100,7 @@ async fn send_stream_inner(
                 &mut speed,
                 tx,
                 cancellation_token,
+                use_compression,
             )
             .await?;
 
@@ -110,6 +114,7 @@ async fn send_stream_inner(
                 &mut speed,
                 tx,
                 cancellation_token,
+                use_compression,
             )
             .await?;
         } else if source_metadata.is_dir() {
@@ -172,6 +177,7 @@ async fn send_stream_inner(
                         &mut speed,
                         tx,
                         cancellation_token,
+                        use_compression,
                     )
                     .await?;
 
@@ -185,6 +191,7 @@ async fn send_stream_inner(
                         &mut speed,
                         tx,
                         cancellation_token,
+                        use_compression,
                     )
                     .await?;
                 }
@@ -209,6 +216,7 @@ async fn send_file(
     speed: &mut MovingAverageCalculator,
     tx: &Sender<Result<FileChunk, Status>>,
     cancellation_token: &CancellationToken,
+    use_compression: bool,
 ) -> Result<(), TransferError> {
     let rel = path.strip_prefix(base).unwrap_or(path);
     let rel_str = rel.to_string_lossy().to_string();
@@ -225,6 +233,7 @@ async fn send_file(
         speed,
         tx,
         cancellation_token,
+        use_compression,
     )
     .await
 }
@@ -239,6 +248,7 @@ async fn send_file(
     speed: &mut MovingAverageCalculator,
     tx: &Sender<Result<FileChunk, Status>>,
     cancellation_token: &CancellationToken,
+    use_compression: bool,
 ) -> Result<(), TransferError> {
     let file = crate::filesystem::vfs::open_file(path).await?;
     let metadata = file.metadata().await.map_err(|e| e.kind())?;
@@ -253,6 +263,7 @@ async fn send_file(
         speed,
         tx,
         cancellation_token,
+        use_compression,
     )
     .await
 }
@@ -267,6 +278,7 @@ async fn send_file_inner(
     speed: &mut MovingAverageCalculator,
     tx: &Sender<Result<FileChunk, Status>>,
     cancellation_token: &CancellationToken,
+    use_compression: bool,
 ) -> Result<(), TransferError> {
     let file_time = metadata.modified().ok().map(|t| {
         let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
@@ -286,10 +298,17 @@ async fn send_file_inner(
             break; // EOF
         }
 
+        let chunk_data: Vec<u8> = if use_compression {
+            crate::server::transfers::compression::compress_chunk(&buffer[..n])
+                .map_err(|e| TransferError::from(e.kind()))?
+        } else {
+            buffer[..n].to_vec()
+        };
+
         let chunk = FileChunk {
             relative_path: relative_path.clone(),
             file_type: FileType::File.into(),
-            chunk: buffer[..n].to_vec().into(),
+            chunk: chunk_data,
             file_mode: 0o644,
             time: if first_chunk { file_time.clone() } else { None },
             symlink_target: String::new(),
