@@ -1,0 +1,1 @@
+Initial stable release of the rewritten Warpinator Android client featuring a modern Material 3 interface and high-performance Rust core.

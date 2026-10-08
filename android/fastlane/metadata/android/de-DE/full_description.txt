@@ -1,0 +1,18 @@
+Warpinator ist ein schnelles, modernes Tool zur Dateiübertragung im lokalen Netzwerk für Android, neu geschrieben für Spitzenleistung mit einer Material 3 Expressive-Benutzeroberfläche.
+
+Es ist vollständig kompatibel mit dem offiziellen Linux Mint Warpinator-Protokoll und ermöglicht das nahtlose Senden und Empfangen von Dateien zwischen Ihren Geräten über die Perceivers-Clients oder die offizielle Warpinator-App.
+
+Funktionen:
+• Automatische Geräteerkennung im lokalen Netzwerk (mDNS)
+• Ende-zu-Ende-verschlüsselte Verbindungen mit anpassbaren Gruppencodes
+• Schnelle Datei- und Ordnerübertragungen dank des hochperformanten Perceivers Warpinator-Kerns
+• Direktes Senden von Textnachrichten und Zwischenablage-Inhalten zwischen Geräten
+• Optimiert für Laptops (Googlebooks & Chromebooks), Tablets und Foldables mit Tastenkombinationen und Drag-and-Drop-Dateitransfer zwischen Fenstern
+• Manuelle Verbindung per QR-Code-Scan oder IP-Adresse
+• Android-Freigabemenü: Dateien direkt aus jeder Android-App versenden
+• Kachel in den Schnelleinstellungen zum schnellen Umschalten des Hintergrunddienstes
+• Hintergrundübertragungen mit Fortschrittsbenachrichtigungen
+• Vollständige Privatsphäre: 100 % Offline-Übertragung im lokalen Netzwerk, keine Konten, kein Tracking und keine Werbung
+
+
+Hinweis: Dieses Projekt ist ein unabhängiger Open-Source-Client und steht in keiner Verbindung zum Linux Mint-Projekt. Die Android-App ist ein Fork von slowscripts Warpinator-Implementierung und enthält weiterhin Teile des ursprünglichen Codes und der Beiträge.
