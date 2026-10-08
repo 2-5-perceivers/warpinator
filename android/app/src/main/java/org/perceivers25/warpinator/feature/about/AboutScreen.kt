@@ -5,8 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,12 +28,11 @@ import org.perceivers25.warpinator.core.design.shapes.segmentedDynamicShapes
 import org.perceivers25.warpinator.core.design.theme.WarpinatorTheme
 import org.perceivers25.warpinator.core.utils.Utils
 
-private const val TRANSLATE_URL =
-    "https://hosted.weblate.org/engage/warpinator-android/"
-private const val GOOGLE_PLAY_URL =
-    "https://play.google.com/store/apps/details?id=org.perceivers25.warpinator"
-private const val SOURCE_URL =
-    "https://github.com/slowscript/warpinator-android"
+// private const val TRANSLATE_URL =
+//     "https://hosted.weblate.org/engage/warpinator-android/"
+// private const val GOOGLE_PLAY_URL =
+//     "https://play.google.com/store/apps/details?id=org.perceivers25.warpinator"
+private const val SOURCE_URL = "https://github.com/2-5-perceivers/warpinator"
 private const val ISSUES_URL = "$SOURCE_URL/issues"
 private const val LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.html"
 
@@ -118,7 +118,8 @@ fun AboutScreen() {
             }
 
             item {
-                SegmentedListItem(
+                // TODO: Add these back after setup of translation and Play Store publishing
+                /*SegmentedListItem(
                     onClick = {
                         Utils.openUrl(
                             context, TRANSLATE_URL,
@@ -174,12 +175,12 @@ fun AboutScreen() {
                         )
                     },
                 )
-                Spacer(Modifier.height(ListItemDefaults.SegmentedGap))
+                Spacer(Modifier.height(ListItemDefaults.SegmentedGap))*/
                 SegmentedListItem(
                     onClick = {
                         Utils.openUrl(context, SOURCE_URL)
                     },
-                    shapes = ListItemDefaults.segmentedDynamicShapes(2, 3),
+                    shapes = ListItemDefaults.segmentedDynamicShapes(0, 1),
                     colors = ListItemDefaults.segmentedColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     ),
