@@ -1,6 +1,6 @@
 [package]
 name = "warpinator-tauri"
-version = "0.1.1"
+version = "1.0.0"
 description = "A Tauri App"
 authors = ["2.5 Perceivers", "Rares Vanca"]
 edition = "2024"
