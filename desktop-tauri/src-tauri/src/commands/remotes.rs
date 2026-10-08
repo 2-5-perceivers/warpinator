@@ -3,8 +3,10 @@ use std::net::IpAddr;
 use serde::Serialize;
 use tauri::State;
 use warpinator_lib::config::features::ProtocolFeatures;
-use warpinator_lib::remote_manager::{ManualConnectionError, RemoteManager};
+use warpinator_lib::remote_manager::ManualConnectionError;
 use warpinator_lib::types::remote::{Remote, RemoteState};
+
+use crate::server::RemoteManagerHandle;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct RemoteUi {
@@ -47,30 +49,30 @@ impl From<Remote> for RemoteUi {
 
 #[tauri::command]
 pub async fn get_remote(
-    remotes: State<'_, RemoteManager>,
+    remotes: State<'_, RemoteManagerHandle>,
     remote_uuid: String,
 ) -> Result<Option<RemoteUi>, String> {
-    Ok(remotes.remote(remote_uuid.as_str()).await.map(|r| r.into()))
+    Ok(remotes.get().remote(remote_uuid.as_str()).await.map(|r| r.into()))
 }
 
 #[tauri::command]
-pub async fn get_remotes(remotes: State<'_, RemoteManager>) -> Result<Vec<RemoteUi>, String> {
-    Ok(remotes.remotes().await.into_iter().map(|r| r.into()).collect())
+pub async fn get_remotes(remotes: State<'_, RemoteManagerHandle>) -> Result<Vec<RemoteUi>, String> {
+    Ok(remotes.get().remotes().await.into_iter().map(|r| r.into()).collect())
 }
 
 #[tauri::command]
 pub async fn connect_remote(
-    remotes: State<'_, RemoteManager>,
+    remotes: State<'_, RemoteManagerHandle>,
     remote_uuid: String,
 ) -> Result<(), String> {
-    let remote = remotes.get_worker(remote_uuid.as_str()).await.ok_or("No remote found")?;
+    let remote = remotes.get().get_worker(remote_uuid.as_str()).await.ok_or("No remote found")?;
     remote.connect().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn manual_connect_remote(
-    remotes: State<'_, RemoteManager>,
+    remotes: State<'_, RemoteManagerHandle>,
     remote_url: String,
 ) -> Result<(), ManualConnectionError> {
-    remotes.manual_connection(remote_url.as_str()).await
+    remotes.get().manual_connection(remote_url.as_str()).await
 }

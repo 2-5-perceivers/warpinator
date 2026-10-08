@@ -6,7 +6,8 @@ use serde::Serialize;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_store::StoreExt;
-use warpinator_lib::config::user::UserConfig;
+
+use crate::server::UserConfigHandle;
 
 #[derive(Serialize, Clone)]
 pub struct ThemeSettings {
@@ -35,8 +36,9 @@ pub fn get_theme_settings(settings: State<'_, ThemeSettings>) -> ThemeSettings {
 
 #[tauri::command]
 pub async fn get_registration_info(
-    config: State<'_, UserConfig>,
+    config: State<'_, UserConfigHandle>,
 ) -> Result<RegistrationInfo, String> {
+    let config = config.get();
     Ok(RegistrationInfo {
         ip: config.bind_addr_v4.map(|a| a.to_string()).ok_or("IPv4 bind address not found")?,
         port: config.reg_port,
@@ -44,7 +46,8 @@ pub async fn get_registration_info(
 }
 
 #[tauri::command]
-pub async fn get_user_config(config: State<'_, UserConfig>) -> Result<Configuration, String> {
+pub async fn get_user_config(config: State<'_, UserConfigHandle>) -> Result<Configuration, String> {
+    let config = config.get();
     Ok(Configuration {
         group_code: config.group_code.clone(),
         hostname: config.hostname.clone(),
@@ -57,7 +60,7 @@ pub async fn get_user_config(config: State<'_, UserConfig>) -> Result<Configurat
 #[tauri::command]
 pub async fn update_user_profile_picture(
     app_handle: tauri::AppHandle,
-    config: State<'_, UserConfig>,
+    config: State<'_, UserConfigHandle>,
     path: &Path,
 ) -> Result<(), String> {
     let avatar_path =
@@ -79,7 +82,7 @@ pub async fn update_user_profile_picture(
         Ok::<_, String>(png_bytes)
     }).await.map_err(|e| format!("Task panicked: {}", e))? // Handle JoinError
         ?;
-    config.set_picture(Some(&*image)).await;
+    config.get().set_picture(Some(&*image)).await;
 
     app_handle
         .store("settings.json")
@@ -92,7 +95,7 @@ pub async fn update_user_profile_picture(
 #[tauri::command]
 pub async fn select_user_profile_picture(
     app_handle: tauri::AppHandle,
-    config: State<'_, UserConfig>,
+    config: State<'_, UserConfigHandle>,
 ) -> Result<(), String> {
     let app = app_handle.clone();
 
@@ -122,14 +125,14 @@ pub async fn select_user_profile_picture(
 #[tauri::command]
 pub async fn clear_user_profile_picture(
     app_handle: tauri::AppHandle,
-    config: State<'_, UserConfig>,
+    config: State<'_, UserConfigHandle>,
 ) -> Result<(), String> {
     let avatar_path =
         app_handle.path().app_data_dir().map_err(|e| e.to_string())?.join("avatar.png");
 
     app_handle.store("settings.json").map_err(|_| "Failed to get store")?.delete("profile-picture");
     tokio::fs::remove_file(avatar_path).await.map_err(|e| e.to_string())?;
-    config.set_picture(None).await;
+    config.get().set_picture(None).await;
 
     Ok(())
 }
@@ -137,10 +140,10 @@ pub async fn clear_user_profile_picture(
 #[tauri::command]
 pub async fn update_user_display_name(
     app_handle: tauri::AppHandle,
-    config: State<'_, UserConfig>,
+    config: State<'_, UserConfigHandle>,
     name: String,
 ) -> Result<(), String> {
-    config.set_display_name(&*name).await;
+    config.get().set_display_name(&*name).await;
     app_handle.store("settings.json").map_err(|_| "Failed to get store")?.set("display-name", name);
 
     Ok(())
@@ -149,10 +152,10 @@ pub async fn update_user_display_name(
 #[tauri::command]
 pub async fn update_user_compression(
     app_handle: tauri::AppHandle,
-    config: State<'_, UserConfig>,
+    config: State<'_, UserConfigHandle>,
     enabled: bool,
 ) -> Result<(), String> {
-    config.set_use_compression(enabled);
+    config.get().set_use_compression(enabled);
     app_handle
         .store("settings.json")
         .map_err(|_| "Failed to get store")?

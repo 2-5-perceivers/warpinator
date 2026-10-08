@@ -22,15 +22,20 @@ export function useRemotes() {
 
     fetchRemotes();
 
-    const unlisten = listen<WarpEvent>("warp-event", async (event) => {
+    const unlistenWarp = listen<WarpEvent>("warp-event", async (event) => {
       const ev = event.payload;
       if ("RemoteAdded" in ev || "RemoteUpdated" in ev) {
         await fetchRemotes();
       }
     });
 
+    const unlistenRestart = listen("service-restarted", async () => {
+      await fetchRemotes();
+    });
+
     return () => {
-      unlisten.then((f) => f());
+      unlistenWarp.then((f) => f());
+      unlistenRestart.then((f) => f());
     };
   }, []);
 

@@ -22,10 +22,12 @@ import {
   Settings01Icon,
   UserIcon,
 } from "@hugeicons/core-free-icons";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { exit } from "@tauri-apps/plugin-process";
 import { useSettings } from "@/contexts/SettingsProvider.tsx";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 export function SidebarUser({
   setManualConnectionDialogOpen,
@@ -34,6 +36,33 @@ export function SidebarUser({
 }) {
   const { isMobile } = useSidebar();
   const { settings } = useSettings();
+  const [isRestarting, setIsRestarting] = useState(false);
+
+  const restartService = async () => {
+    if (isRestarting) return;
+    setIsRestarting(true);
+    const toastId = toast.loading("Restarting Warpinator service...");
+    try {
+      await invoke("restart_service");
+      toast.success("Warpinator service restarted", { id: toastId });
+    } catch (err) {
+      console.error("Failed to restart service", err);
+      toast.error("Failed to restart service", { id: toastId });
+    } finally {
+      setIsRestarting(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        restartService();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isRestarting]);
 
   const quitApp = () => {
     exit(0).catch(() => {
@@ -111,8 +140,14 @@ export function SidebarUser({
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem disabled>
-                  <HugeiconsIcon icon={ArrowReloadHorizontalIcon} />
+                <DropdownMenuItem
+                  onSelect={restartService}
+                  disabled={isRestarting}
+                >
+                  <HugeiconsIcon
+                    icon={ArrowReloadHorizontalIcon}
+                    className={isRestarting ? "animate-spin" : undefined}
+                  />
                   Restart
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={openSettingsWindow}>

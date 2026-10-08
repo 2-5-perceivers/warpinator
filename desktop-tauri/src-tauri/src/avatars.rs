@@ -1,15 +1,15 @@
 use tauri::http::{Request, Response, header};
 use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
-use warpinator_lib::config::user::UserConfig;
-use warpinator_lib::remote_manager::RemoteManager;
+
+use crate::server::{RemoteManagerHandle, UserConfigHandle};
 
 pub fn avatars_protocol_handler<'a, R: Runtime>(
     ctx: UriSchemeContext<R>,
     request: Request<Vec<u8>>,
     responder: UriSchemeResponder,
 ) {
-    let remote_manger = ctx.app_handle().state::<RemoteManager>().inner().clone();
-    let configuration = ctx.app_handle().state::<UserConfig>().inner().clone();
+    let remote_manger = ctx.app_handle().state::<RemoteManagerHandle>().get();
+    let configuration = ctx.app_handle().state::<UserConfigHandle>().get();
     let remote_uuid = request.uri().authority().map(|a| a.as_str()).unwrap_or_default().to_string();
 
     tauri::async_runtime::spawn(async move {

@@ -1,26 +1,24 @@
-use std::fs;
 use std::sync::Arc;
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::oneshot;
 use warpinator_lib::WarpinatorServer;
-use warpinator_lib::config::user::UserConfig;
 
 use crate::commands::messages::*;
 use crate::commands::remotes::*;
 use crate::commands::settings::*;
 use crate::commands::transfers::*;
-use crate::events::HandleEvent;
+use crate::server::*;
 
 #[macro_use]
 mod commands;
 mod avatars;
 mod events;
+mod server;
 
 fn spawn_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let icon = include_bytes!("../icons/symbolic.png");
@@ -89,6 +87,8 @@ pub fn run() {
             clear_user_profile_picture,
             update_user_display_name,
             update_user_compression,
+            // Server
+            restart_service,
         ])
         .register_asynchronous_uri_scheme_protocol("avatars", avatars::avatars_protocol_handler)
         .setup(|app| {
@@ -102,25 +102,6 @@ pub fn run() {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "system".to_string());
 
-            let group_code = store
-                .get("group-code")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "Warpinator".to_string());
-
-            let display_name = store
-                .get("display-name")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| whoami::realname().unwrap_or("Warpinator".to_string()));
-
-            let use_compression =
-                store.get("use-compression").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            let profile_picture = store.get("profile-picture").and_then(|v| {
-                fs::read(handle.path().app_data_dir().ok()?.to_path_buf().join(v.as_str().unwrap()))
-                    .ok()
-            });
-
-            let username = whoami::username().unwrap_or_else(|_| "warpinator".to_string());
             let hostname = whoami::hostname().unwrap_or_else(|_| "warpinator".to_string());
 
             let service_id = store
@@ -135,66 +116,47 @@ pub fn run() {
                     s_uuid
                 });
 
-            let mut user_config_builder = UserConfig::builder()
-                .default_bind_addr_v4()
-                .default_bind_addr_v6()
-                .hostname(&hostname)
-                .username(&username)
-                .display_name(&display_name)
-                .group_code(&group_code)
-                .use_compression(use_compression);
-
-            if let Some(picture) = profile_picture {
-                user_config_builder = user_config_builder.picture(&*picture);
-            }
-
-            let user_config = user_config_builder.build();
+            let user_config = build_user_config(&handle)?;
+            let user_config_handle = UserConfigHandle::new(user_config.clone());
 
             let server = WarpinatorServer::builder()
-                .user_config(user_config.clone())
+                .user_config(user_config)
                 .service_name(&service_id)
                 .build()
                 .expect("failed to build server");
 
             let remote_manager = server.remotes.clone();
-            let mut warp_events = server.remotes.subscribe();
-            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            let remote_manager_handle = RemoteManagerHandle::new(remote_manager.clone());
+            let shutdown_tx = Arc::new(std::sync::Mutex::new(None));
+            let server_task = Arc::new(std::sync::Mutex::new(None));
 
-            handle.manage(Arc::new(shutdown_tx));
-            handle.manage(remote_manager);
-            handle.manage(user_config);
-            handle.manage(ThemeSettings { theme });
+            let server_state = ServerState {
+                remote_manager: remote_manager_handle.clone(),
+                user_config: user_config_handle.clone(),
+                shutdown_tx: shutdown_tx.clone(),
+                server_task: server_task.clone(),
+                service_id,
+            };
 
+            let (init_shutdown_tx, init_shutdown_rx) = oneshot::channel::<()>();
+            *shutdown_tx.lock().unwrap() = Some(init_shutdown_tx);
+
+            let warp_events = remote_manager.subscribe();
             let service_app_handle = handle.clone();
+            let task = spawn_server_task(
+                remote_manager,
+                service_app_handle,
+                warp_events,
+                server,
+                init_shutdown_rx,
+            );
 
-            tauri::async_runtime::spawn(async move {
-                let remote_manager = server.remotes.clone();
-                // Handle events
-                tokio::spawn(async move {
-                    let store = service_app_handle.store("settings.json").unwrap();
-                    let path = service_app_handle.path();
-                    let notification_ext = service_app_handle.notification();
+            *server_task.lock().unwrap() = Some(task);
 
-                    while let Ok(ev) = warp_events.recv().await {
-                        let _ = service_app_handle.emit("warp-event", &ev);
-                        let auto_accepted =
-                            ev.try_auto_accept(store.as_ref(), path, &remote_manager).await;
-
-                        if let Ok(false) = auto_accepted {
-                            let _ = ev
-                                .try_notify(store.as_ref(), &notification_ext, &remote_manager)
-                                .await;
-                        }
-                    }
-                });
-
-                server
-                    .serve_with_shutdown(async move {
-                        let _ = shutdown_rx.await;
-                    })
-                    .await
-                    .expect("server error");
-            });
+            handle.manage(remote_manager_handle);
+            handle.manage(user_config_handle);
+            handle.manage(server_state);
+            handle.manage(ThemeSettings { theme });
 
             tauri::async_runtime::spawn_blocking(move || {
                 let _ = spawn_tray(&handle);
