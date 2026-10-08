@@ -1,0 +1,125 @@
+name: Desktop Tauri Release
+
+on:
+  push:
+    tags:
+      - 'v*-tauri'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g. v0.1.1-tauri)'
+        required: false
+        default: ''
+
+jobs:
+  create-release:
+    name: Create Release & Scoped Changelog
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+      tag_name: ${{ steps.extract_version.outputs.tag_name }}
+      release_name: ${{ steps.extract_version.outputs.release_name }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version and release name
+        id: extract_version
+        run: |
+          RAW_TAG="${{ inputs.tag_name || github.ref_name }}"
+          VERSION=$(echo "$RAW_TAG" | sed -e 's/^v//' -e 's/-tauri$//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=${VERSION} Desktop Tauri" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Desktop-scoped changelog
+        id: changelog
+        run: |
+          RAW_TAG="${{ steps.extract_version.outputs.tag_name }}"
+          PREV_TAG=$(git tag --sort=-creatordate --list 'v*-tauri' | grep -v "^${RAW_TAG}$" | head -n 1 || true)
+          
+          {
+            echo "## What's Changed in Warpinator Desktop"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "Changes since **$PREV_TAG**:"
+              echo ""
+              CHANGES=$(git log "$PREV_TAG..$RAW_TAG" --pretty=format:"* %s (%h)" -- desktop-tauri/ core/)
+            else
+              echo "Changes:"
+              echo ""
+              CHANGES=$(git log "$RAW_TAG" --pretty=format:"* %s (%h)" -- desktop-tauri/ core/)
+            fi
+            if [ -z "$CHANGES" ]; then
+              echo "* No changes in Desktop Tauri or Core modules."
+            else
+              echo "$CHANGES"
+            fi
+          } > changelog.md
+          
+          {
+            echo "changelog<<CHANGELOG_EOF"
+            cat changelog.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  publish-tauri:
+    name: Build & Upload Desktop Bundles (${{ matrix.platform }})
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest" # Arm based macs (Apple Silicon).
+            args: "--target aarch64-apple-darwin"
+          - platform: "macos-latest" # Intel based macs.
+            args: "--target x86_64-apple-darwin"
+          - platform: "ubuntu-22.04"
+            args: ""
+          - platform: "windows-latest"
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf rpm
+
+      - name: Install frontend dependencies
+        working-directory: desktop-tauri
+        run: npm install
+
+      - name: Build and upload Tauri assets
+        uses: tauri-apps/tauri-action@v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: ./desktop-tauri
+          tagName: ${{ needs.create-release.outputs.tag_name }}
+          releaseName: ${{ needs.create-release.outputs.release_name }}
+          releaseBody: ${{ needs.create-release.outputs.changelog }}
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

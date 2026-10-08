@@ -1,0 +1,131 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - 'v*-android'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g. v0.1.0-android)'
+        required: false
+        default: ''
+
+jobs:
+  release-android:
+    name: Build & Release Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version and release name
+        id: extract_version
+        run: |
+          RAW_TAG="${{ inputs.tag_name || github.ref_name }}"
+          VERSION=$(echo "$RAW_TAG" | sed -e 's/^v//' -e 's/-android$//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=${VERSION} Android" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Android-scoped changelog
+        id: changelog
+        run: |
+          RAW_TAG="${{ steps.extract_version.outputs.tag_name }}"
+          PREV_TAG=$(git tag --sort=-creatordate --list 'v*-android' | grep -v "^${RAW_TAG}$" | head -n 1 || true)
+          
+          {
+            echo "## What's Changed in Warpinator for Android"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "Changes since **$PREV_TAG**:"
+              echo ""
+              CHANGES=$(git log "$PREV_TAG..$RAW_TAG" --pretty=format:"* %s (%h)" -- android/ core/ ffi-bindings/)
+            else
+              echo "Changes:"
+              echo ""
+              CHANGES=$(git log "$RAW_TAG" --pretty=format:"* %s (%h)" -- android/ core/ ffi-bindings/)
+            fi
+            if [ -z "$CHANGES" ]; then
+              echo "* No changes in Android, Core, or FFI modules."
+            else
+              echo "$CHANGES"
+            fi
+          } > changelog.md
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android NDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "ndk;30.0.16248370"
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Decode Android Keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "${{ github.workspace }}/warpinator-release.keystore"
+            echo "Keystore decoded successfully."
+          else
+            echo "RELEASE_ANDROID_KEYSTORE_BASE64 is empty; proceeding without signing."
+          fi
+
+      - name: Build Android Release APK
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/30.0.16248370
+          RELEASE_ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/warpinator-release.keystore
+          RELEASE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_ANDROID_KEY_ALIAS: ${{ secrets.RELEASE_ANDROID_KEY_ALIAS }}
+          RELEASE_ANDROID_KEY_PASSWORD: ${{ secrets.RELEASE_ANDROID_KEY_PASSWORD }}
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_HOME}/ndk/30.0.16248370}"
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Prepare APK Asset
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -f "$APK_PATH" ]; then
+            cp "$APK_PATH" "warpinator_${VERSION}.apk"
+            echo "Prepared warpinator_${VERSION}.apk from $APK_PATH"
+          else
+            echo "ERROR: Release APK not found!"
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.extract_version.outputs.tag_name }}
+          name: ${{ steps.extract_version.outputs.release_name }}
+          body_path: changelog.md
+          files: |
+            warpinator_*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
