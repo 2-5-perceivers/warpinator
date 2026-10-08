@@ -5,6 +5,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SettingsWindow } from "@/windows/SettingsWindow.tsx";
 import { AboutWindow } from "@/windows/AboutWindow.tsx";
 
+// Disable default right-click context menu (web container controls)
+document.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+});
+
 const currentWindow = getCurrentWindow();
 const RootComponent = (() => {
   switch (currentWindow.label) {
