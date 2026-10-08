@@ -13,9 +13,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.LifecycleService
-import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.launch
 import org.perceivers25.warpinator.core.data.ServiceState
 import org.perceivers25.warpinator.core.data.WarpinatorRepository
 import org.perceivers25.warpinator.core.notification.WarpinatorNotificationManager
@@ -133,9 +131,7 @@ class MainService : LifecycleService() {
 
         notificationManager.cancelAll()
 
-        lifecycleScope.launch {
-            // TODO: stop server
-        }
+        repository.stop()
 
         if (connMgr != null && networkCallback != null) {
             try {

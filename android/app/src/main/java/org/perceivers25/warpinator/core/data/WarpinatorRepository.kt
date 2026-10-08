@@ -339,6 +339,14 @@ class WarpinatorRepository @Inject constructor(
         )
     }
 
+    fun stop() {
+        try {
+            server?.stop()
+            server = null
+        } catch (_: Exception) {
+        }
+    }
+
     fun restart() {
 
         try {
