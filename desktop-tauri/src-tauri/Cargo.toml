@@ -17,7 +17,7 @@ name = "warpinator_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -25,21 +25,21 @@ serde_json = "1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing = { version = "0.1.44", features = ["release_max_level_debug"] }
 warpinator-lib = {path = "../../core", features = ["serde"] }
-tokio = { version = "1.50.0", features = ["full"] }
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-os = "2.3.2"
-tauri-plugin-opener = "2"
-tauri-plugin-store = "2"
-tauri-plugin-process = "2"
-tauri-plugin-dialog = "2"
-whoami = "2.1.1"
-uuid = { version = "1.23.0", features = ["v4"] }
+tokio = { version = "1.53.1", features = ["full"] }
+tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
+tauri-plugin-os = "2.4.0"
+tauri-plugin-opener = "2.7.0"
+tauri-plugin-store = "2.5.0"
+tauri-plugin-process = "2.4.0"
+tauri-plugin-dialog = "2.8.1"
+whoami = "2.1.3"
+uuid = { version = "1.27.0", features = ["v4"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-notification = "2"
+tauri-plugin-clipboard-manager = "2.4.1"
+tauri-plugin-notification = "2.5.1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = "2.5.2"
 
 [profile.release]
 panic = "abort"
