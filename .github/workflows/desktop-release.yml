@@ -69,7 +69,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   publish-tauri:
-    name: Build & Upload Desktop Bundles (${{ matrix.platform }})
+    name: Build & Upload Desktop Bundles (${{ matrix.name }})
     needs: create-release
     permissions:
       contents: write
@@ -77,14 +77,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest" # Arm based macs (Apple Silicon).
+          - platform: "macos-latest"
+            name: "macOS ARM"
+            target: "aarch64-apple-darwin"
             args: "--target aarch64-apple-darwin"
-          - platform: "macos-latest" # Intel based macs.
-            args: "--target x86_64-apple-darwin"
           - platform: "ubuntu-22.04"
+            name: "Linux x64"
+            target: ""
+            args: ""
+          - platform: "ubuntu-24.04-arm"
+            name: "Linux ARM"
+            target: ""
             args: ""
           - platform: "windows-latest"
+            name: "Windows x64"
+            target: ""
             args: ""
+          - platform: "windows-latest"
+            name: "Windows ARM"
+            target: "aarch64-pc-windows-msvc"
+            args: "--target aarch64-pc-windows-msvc --bundles nsis"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -92,17 +104,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: lts/*
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target || '' }}
 
       - name: Install dependencies (Ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf rpm
