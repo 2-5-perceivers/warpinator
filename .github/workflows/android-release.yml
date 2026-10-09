@@ -105,17 +105,26 @@ jobs:
           cd android
           ./gradlew assembleRelease --stacktrace
 
-      - name: Prepare APK Asset
+      - name: Prepare APK Assets
         run: |
           VERSION="${{ steps.extract_version.outputs.version }}"
-          APK_PATH=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          if [ -f "$APK_PATH" ]; then
-            cp "$APK_PATH" "warpinator_${VERSION}.apk"
-            echo "Prepared warpinator_${VERSION}.apk from $APK_PATH"
-          else
-            echo "ERROR: Release APK not found!"
+          count=0
+          for apk in android/app/build/outputs/apk/release/*.apk; do
+            if [ -f "$apk" ]; then
+              fname=$(basename "$apk")
+              abi=$(echo "$fname" | sed -E "s/^app-([a-zA-Z0-9_-]+)-release.*/\1/")
+              dest="warpinator_${VERSION}_${abi}.apk"
+              cp "$apk" "$dest"
+              echo "Prepared $dest from $apk"
+              count=$((count + 1))
+            fi
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "ERROR: No release APKs found in android/app/build/outputs/apk/release!"
             exit 1
           fi
+          echo "Successfully prepared $count APK assets:"
+          ls -lh warpinator_*.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

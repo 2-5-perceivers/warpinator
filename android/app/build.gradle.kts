@@ -36,8 +36,9 @@ android {
         applicationId = "org.perceivers25.warpinator"
         minSdk = 26
         targetSdk = 37
-        versionCode = 101
-        versionName = "1.0.1"
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -79,6 +80,15 @@ android {
 
     androidResources {
         generateLocaleConfig = true
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = true
+        }
     }
 }
 
