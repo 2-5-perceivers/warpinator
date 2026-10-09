@@ -57,8 +57,8 @@ android {
         applicationId = "org.perceivers25.warpinator"
         minSdk = 26
         targetSdk = 37
-        versionCode = 102
-        versionName = "1.0.2"
+        versionCode = 103
+        versionName = "1.0.3"
     }
 
     signingConfigs {
