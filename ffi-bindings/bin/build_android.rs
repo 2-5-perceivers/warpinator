@@ -6,7 +6,7 @@ const LIB_NAME: &str = "libwarpinator";
 const CRATE_NAME: &str = "warpinator-ffi";
 const BINDGEN_BIN: &str = "bindgen";
 
-const TARGETS: &[&str] = &["armeabi-v7a", "arm64-v8a", "x86", "x86_64"];
+const ALL_TARGETS: &[&str] = &["armeabi-v7a", "arm64-v8a", "x86", "x86_64"];
 const FEATURES: &[&str] = &[
     "virtual_filesystem",
     "power_manager",
@@ -23,6 +23,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref ndk) = ndk_home {
         println!("Using NDK: {}", ndk.display());
     }
+
+    // Determine target ABI(s)
+    let requested_targets: Option<Vec<String>> = env::var("TARGET_ABIS")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .or_else(|| {
+            let args: Vec<String> = env::args().collect();
+            for i in 1..args.len() {
+                if (args[i] == "--targets" || args[i] == "-t" || args[i] == "--target")
+                    && i + 1 < args.len()
+                {
+                    return Some(
+                        args[i + 1]
+                            .split(',')
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect(),
+                    );
+                }
+            }
+            None
+        });
+
+    let targets: Vec<String> = match requested_targets {
+        Some(list) => {
+            if list.is_empty() {
+                eprintln!("Empty ABI target list specified.");
+                std::process::exit(1);
+            }
+            for target in &list {
+                if !ALL_TARGETS.contains(&target.as_str()) {
+                    eprintln!(
+                        "Unsupported ABI target '{}'. Supported ABIs are: {:?}",
+                        target, ALL_TARGETS
+                    );
+                    std::process::exit(1);
+                }
+            }
+            list
+        }
+        None => ALL_TARGETS.iter().map(|s| s.to_string()).collect(),
+    };
+
+    println!("Targeting Android ABIs: {:?}", targets);
 
     let jni_libs_dir = env::var("JNI_LIBS_DIR")
         .map(PathBuf::from)
@@ -49,7 +98,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     check_command("cargo", "cargo not found. Install Rust");
     check_cargo_ndk();
 
-    println!("\nBuilding unstripped version for binding generation (profile: {profile})...");
+    let reference_target = &targets[0];
+    println!(
+        "\nBuilding unstripped version for binding generation (target: {reference_target}, profile: {profile})..."
+    );
     fs::create_dir_all(&unstripped_jni_libs)?;
 
     let strip_config = ["--config", "profile.release.strip=false"];
@@ -57,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cmd.current_dir(&script_dir)
         .arg("ndk")
         .arg("-t")
-        .arg(TARGETS[0])
+        .arg(reference_target)
         .args(["-o", unstripped_jni_libs.to_str().unwrap()])
         .arg("build")
         .args(&cargo_flags)
@@ -79,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&bindings_dir)?;
 
     let reference_lib = unstripped_jni_libs
-        .join(TARGETS[0])
+        .join(reference_target)
         .join(format!("{LIB_NAME}.so"));
     let uniffi_config = script_dir.join("uniffi-android.toml");
 
@@ -136,14 +188,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!(
-        "Building {CRATE_NAME} for Android targets (profile: {profile}) into {}...",
+        "Building {CRATE_NAME} for Android targets {:?} (profile: {profile}) into {}...",
+        targets,
         jni_libs_dir.display()
     );
     fs::create_dir_all(&jni_libs_dir)?;
 
-    let platform_args = TARGETS
+    let platform_args = targets
         .iter()
-        .flat_map(|target| ["-t", target])
+        .flat_map(|target| ["-t", target.as_str()])
         .collect::<Vec<_>>();
 
     let mut cmd = Command::new("cargo");

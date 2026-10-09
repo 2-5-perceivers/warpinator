@@ -1,3 +1,4 @@
+import com.android.build.api.variant.FilterConfiguration
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
@@ -20,6 +21,26 @@ kotlin {
     }
 }
 
+val supportedAbis = setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+
+val rawAbiProperty: String? = (project.findProperty("abiFilters")
+    ?: project.findProperty("android.injected.build.abi"))?.toString()
+
+val targetAbis: List<String> = if (!rawAbiProperty.isNullOrBlank()) {
+    rawAbiProperty.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+} else {
+    emptyList()
+}
+
+// Fail early if any unsupported ABI is passed
+targetAbis.forEach { abi ->
+    if (abi !in supportedAbis) {
+        throw GradleException("Unsupported ABI target '$abi'. Supported ABIs are: ${supportedAbis.joinToString(", ")}")
+    }
+}
+
+val activeAbis = if (targetAbis.isNotEmpty()) targetAbis else supportedAbis.toList()
+
 val ndkVersion = "30.0.16248370"
 
 android {
@@ -38,10 +59,6 @@ android {
         targetSdk = 37
         versionCode = 102
         versionName = "1.0.2"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-        }
     }
 
     signingConfigs {
@@ -89,8 +106,39 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-            isUniversalApk = true
+            include(*activeAbis.toTypedArray())
+            isUniversalApk = activeAbis.size > 1
+        }
+    }
+
+    packaging {
+        jniLibs {
+            excludes += listOf(
+                "lib/armeabi/**",
+                "lib/mips/**",
+                "lib/mips64/**",
+            )
+        }
+    }
+}
+
+val abiCodes = mapOf(
+    "armeabi-v7a" to 1,
+    "arm64-v8a" to 2,
+    "x86" to 3,
+    "x86_64" to 4,
+)
+
+androidComponents {
+    onVariants { variant ->
+        val baseCode = android.defaultConfig.versionCode ?: 100
+        variant.outputs.forEach { output ->
+            val abi = output.filters.find {
+                it.filterType == FilterConfiguration.FilterType.ABI
+            }?.identifier ?: targetAbis.singleOrNull()
+
+            val abiOffset = abiCodes[abi] ?: 0
+            output.versionCode.set(baseCode * 10 + abiOffset)
         }
     }
 }
@@ -171,6 +219,8 @@ val buildRustLibs by tasks.registering(Exec::class) {
     if (ndkDir != null) {
         environment("ANDROID_NDK_HOME", ndkDir)
     }
+
+    environment("TARGET_ABIS", activeAbis.joinToString(","))
 
     val userHome = System.getProperty("user.home")
     val currentPath = System.getenv("PATH") ?: ""
