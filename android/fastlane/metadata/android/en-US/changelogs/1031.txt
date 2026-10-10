@@ -1,3 +1,0 @@
-* Improve Android compilation speeds by compiling only targeted ABIs
-* Exclude unsupported legacy ABIs (armeabi, mips, mips64) from APKs
-* Pin Rust toolchain and cargo-ndk in Android release workflow
