@@ -93,6 +93,15 @@ jobs:
             echo "RELEASE_ANDROID_KEYSTORE_BASE64 is empty; proceeding without signing."
           fi
 
+      - name: Remap host paths
+        shell: bash
+        run: |
+          F="--remap-path-prefix=$HOME=/home/user"
+          F="$F --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+          F="$F --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+          F="$F --remap-path-prefix=$GITHUB_WORKSPACE=/warpinator"
+          echo "RUSTFLAGS=$F" >> "$GITHUB_ENV"
+
       - name: Build Android Release APK
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/30.0.16248370
@@ -100,6 +109,7 @@ jobs:
           RELEASE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_ANDROID_KEYSTORE_PASSWORD }}
           RELEASE_ANDROID_KEY_ALIAS: ${{ secrets.RELEASE_ANDROID_KEY_ALIAS }}
           RELEASE_ANDROID_KEY_PASSWORD: ${{ secrets.RELEASE_ANDROID_KEY_PASSWORD }}
+          RUSTFLAGS: ${{ env.RUSTFLAGS }}
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_HOME}/ndk/30.0.16248370}"
           chmod +x android/gradlew

@@ -123,10 +123,22 @@ jobs:
         working-directory: desktop-tauri
         run: npm install
 
+      - name: Remap host paths
+        shell: bash
+        run: |
+          p() { if [[ "$RUNNER_OS" == "Windows" ]]; then cygpath -w "$1"; else echo "$1"; fi; }
+          F="--remap-path-prefix=$(p "$HOME")=/home/user"
+          F="$F --remap-path-prefix=$(p "${CARGO_HOME:-$HOME/.cargo}")=/cargo"
+          F="$F --remap-path-prefix=$(p "${RUSTUP_HOME:-$HOME/.rustup}")=/rustup"
+          F="$F --remap-path-prefix=$(p "$GITHUB_WORKSPACE")=/warpinator"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then F="$F -C link-arg=/PDBALTPATH:%_PDB%"; fi
+          echo "RUSTFLAGS=$F" >> "$GITHUB_ENV"
+
       - name: Build and upload Tauri assets
         uses: tauri-apps/tauri-action@v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUSTFLAGS: ${{ env.RUSTFLAGS }}
         with:
           projectPath: ./desktop-tauri
           tagName: ${{ needs.create-release.outputs.tag_name }}

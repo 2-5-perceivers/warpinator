@@ -226,6 +226,11 @@ val buildRustLibs by tasks.registering(Exec::class) {
     val currentPath = System.getenv("PATH") ?: ""
     environment("PATH", "$userHome/.cargo/bin:$currentPath")
 
+    val rustFlags = System.getenv("RUSTFLAGS")
+    if (!rustFlags.isNullOrEmpty()) {
+        environment("RUSTFLAGS", rustFlags)
+    }
+
     commandLine(
         "cargo",
         "run",
